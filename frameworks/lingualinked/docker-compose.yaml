@@ -1,0 +1,22 @@
+services:
+  master:
+    build: .
+    volumes:
+      - ./models:/app/models
+    command: ["--role", "master", "--config", "config.yaml"]
+    networks:
+      - linguanet
+
+  worker-1:
+    build: .
+    depends_on:
+      - master
+    volumes:
+      - ./models:/app/models
+    command: ["--role", "worker", "--master_ip", "master"]
+    networks:
+      - linguanet
+
+networks:
+  linguanet:
+    driver: bridge

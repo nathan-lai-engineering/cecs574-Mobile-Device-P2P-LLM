@@ -22,6 +22,7 @@ import zipfile
 torch.fx.wrap('len')
 
 available_models = {
+    "llama2-7b": ["/app/models/llama-7b-hf", "sentencepiece_tokenizer"],
     "bloom560m": ["bigscience/bloom-560m", "huggingface_tokenizer"],
     "bloom1b1": ["bigscience/bloom-1b1", "huggingface_tokenizer"],
     "bloom1b7": ["szzzzz/chatbot_bloom_1b7", "huggingface_tokenizer"],
