@@ -66,8 +66,12 @@ if __name__ == "__main__":
                 last_received_time = time.time()
 
         if time.time() - last_received_time > TIMEOUT:
-            print("No new devices connected in the last", TIMEOUT, "seconds. Broadcasting message.")
-            continue_listening = False
+            if not requested_model or not devices:
+                print("No model or devices registered yet. Continuing to wait...")
+                last_received_time = time.time()
+            else:
+                print("No new devices connected in the last", TIMEOUT, "seconds. Broadcasting message.")
+                continue_listening = False
 
     print(f'devices in root.py: {devices}')
     print(f'request model = {requested_model}')
