@@ -13,6 +13,9 @@ RUN pip install --no-cache-dir "numpy<2" torch==2.0.1 torchvision==0.15.2
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+RUN apt-get update && apt-get install -y patchelf
+RUN find /usr/local/lib/python3.10/site-packages/onnxruntime/capi/ -name "*.so" -exec patchelf --clear-execstack {} +
+
 # Copy the rest of the code
 COPY . .
 

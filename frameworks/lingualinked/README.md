@@ -10,6 +10,8 @@ docker run -it --name lingualink_node_1 `
 cd frameworks/lingualinked/
 pip install torch --index-url https://download.pytorch.org/whl/cpu
 pip install -r requirements.txt
+apt-get update && apt-get install -y patchelf
+patchelf --clear-execstack /usr/local/lib/python3.10/site-packages/onnxruntime/capi/onnxruntime_pybind11_state.cpython-310-x86_64-linux-gnu.so
 python root.py --port 5000
 
 for header/worker node (emulator)
