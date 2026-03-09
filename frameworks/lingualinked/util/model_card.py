@@ -21,6 +21,135 @@ import zipfile
 
 torch.fx.wrap('len')
 
+# Patch: add LLaMA to transformers fx supported models so symbolic_trace works
+try:
+    import transformers.utils.fx as _tfx
+    if "LlamaForCausalLM" not in _tfx._SUPPORTED_MODELS:
+        _tfx._SUPPORTED_MODELS = _tfx._SUPPORTED_MODELS + ("LlamaForCausalLM",)
+except Exception:
+    pass
+
+
+def _patch_llama_for_fx_tracing():
+    """
+    Replace LlamaAttention.forward with a version that:
+    - Correctly uses num_key_value_heads for k/v projections (GQA support
+      missing in transformers 4.33.x for TinyLlama/LLaMA-2)
+    - Removes dynamic tensor size validation checks that break torch.fx tracing
+    """
+    try:
+        import math
+        import torch
+        import torch.nn.functional as F
+        import transformers.models.llama.modeling_llama as _llama_mod
+
+        _apply_rotary_pos_emb = _llama_mod.apply_rotary_pos_emb
+
+        # repeat_kv was added with GQA support — define inline as fallback
+        _repeat_kv = getattr(_llama_mod, 'repeat_kv', None)
+        if _repeat_kv is None:
+            def _repeat_kv(hidden_states, n_rep):
+                if n_rep == 1:
+                    return hidden_states
+                bs, num_kv, slen, head_dim = hidden_states.shape
+                return (hidden_states[:, :, None, :, :]
+                        .expand(bs, num_kv, n_rep, slen, head_dim)
+                        .reshape(bs, num_kv * n_rep, slen, head_dim))
+
+        def patched_forward(
+            self,
+            hidden_states,
+            attention_mask=None,
+            position_ids=None,
+            past_key_value=None,
+            output_attentions=False,
+            use_cache=False,
+        ):
+            bsz, q_len, _ = hidden_states.size()
+
+            # Derive num_key_value_heads from projection weight shape —
+            # transformers 4.33.x doesn't store this as an instance attribute.
+            num_kv_heads = self.k_proj.out_features // self.head_dim
+            num_kv_groups = self.num_heads // num_kv_heads
+
+            query_states = self.q_proj(hidden_states)
+            key_states   = self.k_proj(hidden_states)
+            value_states = self.v_proj(hidden_states)
+
+            query_states = query_states.view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)
+            key_states   = key_states.view(  bsz, q_len, num_kv_heads,   self.head_dim).transpose(1, 2)
+            value_states = value_states.view(bsz, q_len, num_kv_heads,   self.head_dim).transpose(1, 2)
+
+            kv_seq_len = key_states.shape[-2]
+            if past_key_value is not None:
+                kv_seq_len += past_key_value[0].shape[-2]
+
+            cos, sin = self.rotary_emb(value_states, seq_len=kv_seq_len)
+            query_states, key_states = _apply_rotary_pos_emb(query_states, key_states, cos, sin, position_ids)
+
+            if past_key_value is not None:
+                key_states   = torch.cat([past_key_value[0], key_states],   dim=2)
+                value_states = torch.cat([past_key_value[1], value_states], dim=2)
+
+            past_key_value = (key_states, value_states) if use_cache else None
+
+            # Expand k/v heads to match q heads (GQA → MHA expansion)
+            key_states   = _repeat_kv(key_states,   num_kv_groups)
+            value_states = _repeat_kv(value_states, num_kv_groups)
+
+            attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
+
+            if attention_mask is not None:
+                attn_weights = attn_weights + attention_mask
+
+            attn_weights = F.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
+            attn_output  = torch.matmul(attn_weights, value_states)
+            attn_output  = attn_output.transpose(1, 2).contiguous().reshape(bsz, q_len, self.hidden_size)
+            attn_output  = self.o_proj(attn_output)
+
+            if not output_attentions:
+                attn_weights = None
+
+            return attn_output, attn_weights, past_key_value
+
+        cls = getattr(_llama_mod, 'LlamaAttention', None)
+        if cls is not None:
+            cls.forward = patched_forward
+            print("[LLaMA fx patch] Patched LlamaAttention.forward for torch.fx tracing")
+    except Exception as e:
+        print(f"[LLaMA fx patch] Warning: {e}")
+
+
+_patch_llama_for_fx_tracing()
+
+
+def _patch_llama_rotary_for_fx_tracing():
+    """
+    LlamaRotaryEmbedding.forward has `if seq_len > self.max_seq_len_cached:`
+    which fails fx tracing because seq_len is a proxy. The check just lazily
+    extends the cos/sin cache — safe to skip since max_position_embeddings
+    (default 2048) covers all inference lengths we'll use.
+    """
+    try:
+        import transformers.models.llama.modeling_llama as _llama_mod
+        cls = getattr(_llama_mod, 'LlamaRotaryEmbedding', None)
+        if cls is None:
+            return
+
+        def patched_forward(self, x, seq_len=None):
+            return (
+                self.cos_cached[:, :, :seq_len, ...].to(dtype=x.dtype),
+                self.sin_cached[:, :, :seq_len, ...].to(dtype=x.dtype),
+            )
+
+        cls.forward = patched_forward
+        print("[LLaMA fx patch] Patched LlamaRotaryEmbedding.forward for torch.fx tracing")
+    except Exception as e:
+        print(f"[LLaMA fx patch] Warning (rotary): {e}")
+
+
+_patch_llama_rotary_for_fx_tracing()
+
 available_models = {
     "llama-2-7b": ["/app/llama-2-7b", "sentencepiece_tokenizer"],
     "tinyllama": ["TinyLlama/TinyLlama-1.1B-Chat-v1.0", "sentencepiece_tokenizer"],

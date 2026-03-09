@@ -151,13 +151,9 @@ class Monitor:
                     device_set.add(ip)
                     role = jsonObject.get("role")
                     print(f"device set: {device_set}")
-                    # if role == "header":
-                    #     self.devices.appendleft({"ip": ip, "role": role})
-                    # else:
-                    #     self.devices.append({"ip": ip, "role": role})
                 # last_received_time = time.time()
             else:
-                raise RuntimeError("No message received. Check the device connection.")
+                print(f"monitor: waiting for devices... ({len(device_set)}/{self.root_device_len} connected)")
 
 
             # if time.time() - last_received_time > TIMEOUT:
