@@ -3,3 +3,5 @@
 *.vscode
 .idea
 __pycache__
+frameworks/lingualinked/onnx_model/backup/
+frameworks/lingualinked/onnx_model/to_send/

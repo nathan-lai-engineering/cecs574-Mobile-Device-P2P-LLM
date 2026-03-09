@@ -98,7 +98,19 @@ if __name__ == "__main__":
         to_send_path = retrieve_sending_dir(root_dir, requested_model, quantization_option=Quntization_Option,
                                             residual_connection=residual_connection_option)
 
-        if os.path.isdir(to_send_path):
+        # Also verify dep maps exist in backup — if not, treat to_send as stale
+        if residual_connection_option:
+            _qpath = f'{requested_model}_unquantized_res' if not Quntization_Option else f'{requested_model}_quantized_int8_res'
+        else:
+            _qpath = f'{requested_model}_unquantized_seq' if not Quntization_Option else f'{requested_model}_quantized_int8_seq'
+        dep_map_dir = os.path.join(root_dir, 'onnx_model', 'backup', _qpath)
+        dep_maps_exist = all(
+            os.path.isfile(os.path.join(dep_map_dir, f))
+            for f in ['sender_seq_dep_map.json', 'sender_res_dep_map.json',
+                      'receiver_seq_dep_map.json', 'receiver_res_dep_map.json']
+        )
+
+        if os.path.isdir(to_send_path) and dep_maps_exist:
             print('to_send dir exists')
             # Load the JSON string from the file
             with open(os.path.join(to_send_path, 'ip_module.json'), 'r') as file:
@@ -208,7 +220,8 @@ if __name__ == "__main__":
                     i]  # .26: [0], .19: [2], ..
 
             # retreive session for inference
-            session = [str(j) for i in device_module_order for j in i]  # [0, 2, 1]
+            # Each element = comma-separated module indices for one device (e.g. "0,1" for single device)
+            session = [",".join(str(j) for j in i) for i in device_module_order]
 
             # sort the order of ip graph for transmission
             ip_module_map = {}

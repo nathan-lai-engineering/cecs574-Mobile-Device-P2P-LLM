@@ -254,6 +254,23 @@ public class Communication {
                 if (cfg.isHeader()) {
                     System.out.println("Inference on Master");
                     for (int i = 0;  i< sessions.size(); i++){
+                        // Single-device case: last module runs as tailer (no sendIndex entry)
+                        if (i == sessions.size() - 1 && cfg.isTailer()) {
+                            //byte[] res;
+                            if (i == 0) {
+                                res = runInferenceWorkerResidualLastGeneration(sessions.get(i),
+                                        InputData.get(id),
+                                        mergeResFromAndToDevice(id, sessionIndex[i]),
+                                        cfg.k, cfg.initial_temp);
+                            } else {
+                                res = runInferenceWorkerResidualLastGeneration(sessions.get(i),
+                                        OutputData.get(id),
+                                        mergeResFromAndToDevice(id, sessionIndex[i]),
+                                        cfg.k, cfg.initial_temp);
+                            }
+                            OutputData.put(id, res);
+                            break;
+                        }
                         int[] to_send_seq_indices = Utils.JsonArray2IntArray(sendIndex.get(sessionIndex[i]).get(0).getJSONArray(String.valueOf(Integer.parseInt(sessionIndex[i]) + 1)));
                         if (i == 0) {
                             result = ((Object[]) runInferenceMasterResidual(sessions.get(i), Utils.convertArrayListToIntArray(InputIds.get(id)), to_send_seq_indices, getResIndices(i)));

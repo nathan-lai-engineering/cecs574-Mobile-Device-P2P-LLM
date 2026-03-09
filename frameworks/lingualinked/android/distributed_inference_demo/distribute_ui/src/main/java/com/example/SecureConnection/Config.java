@@ -114,8 +114,15 @@ public class Config {
         if (ipCheck(ipGraph)){
             if (local.equals(ipGraph[0])) {
                 setHeader(true);
-                setPrevNodes(new ArrayList<>(Arrays.asList(ipGraph[ipGraph.length-1])));
-                setNextNodes(new ArrayList<>(Arrays.asList(ipGraph[1])));
+                if (ipGraph.length == 1) {
+                    // Single-device pipeline: this node is both header and tailer
+                    setTailer(true);
+                    setPrevNodes(new ArrayList<>(Arrays.asList(ipGraph[0])));
+                    setNextNodes(new ArrayList<>(Arrays.asList(ipGraph[0])));
+                } else {
+                    setPrevNodes(new ArrayList<>(Arrays.asList(ipGraph[ipGraph.length-1])));
+                    setNextNodes(new ArrayList<>(Arrays.asList(ipGraph[1])));
+                }
             }else if (local.equals(ipGraph[ipGraph.length-1])) {
                 setTailer(true);
                 setPrevNodes(new ArrayList<>(Arrays.asList(ipGraph[ipGraph.length-2])));

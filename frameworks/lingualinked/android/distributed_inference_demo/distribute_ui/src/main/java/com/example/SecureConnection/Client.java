@@ -249,13 +249,11 @@ public class Client {
     }
 
     public void modelInitialization(Config cfg, Communication.Params param) {
-//        for (String i: Communication.sessionIndex) {
-////            Communication.sessions.add(createSession(param.modelPath + "/device/module" + i + "/module_" + i + ".onnx"));
-//            Communication.sessions.add(createSession(param.modelPath + "/device/module.onnx"));
-//            System.out.println("Load module " + i + " successfully");
-//            Log.d(TAG, "Load module " + i + " successfully");
-//        }
-        Communication.sessions.add(createSession(param.modelPath + "/device/module.onnx"));
+        for (String i: Communication.sessionIndex) {
+            Communication.sessions.add(createSession(param.modelPath + "/device/module_" + i + ".onnx"));
+            System.out.println("Load module " + i + " successfully");
+            Log.d(TAG, "Load module " + i + " successfully");
+        }
         System.out.println("create session finished");
 
         if (cfg.isHeader() || cfg.isTailer()) {
