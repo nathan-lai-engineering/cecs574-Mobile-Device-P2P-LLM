@@ -15,7 +15,7 @@ from system_pipeline.onnx_backend.optimization import Optimizer
 
 monitor_receive_interval = 5  # set intervals for receiving monitor info from clients
 monitor_port = "34567"  # set server port to receive monitor info
-TIMEOUT = 15  # Time to wait for new devices to connect to servers
+TIMEOUT = 60  # Time to wait for new devices to connect to servers
 MODEL_EXIST_ON_DEVICE = False  # set True if the model exists on the mobile device, will skip model creation and transmission
 runtime_option = False  # set True if the load balance is runtime
 Quntization_Option = False
@@ -43,7 +43,12 @@ if __name__ == "__main__":
     while continue_listening:
         if send.poll(1000):
             print("start listening")
-            identifier, action, msg_content = send.recv_multipart()
+            frames = send.recv_multipart()
+            if len(frames) == 2:
+                identifier, msg_content = frames
+                action = b'RegisterIP'
+            else:
+                identifier, action, msg_content = frames
             print(f"action: {action.decode()}")
             print(f"msg_content: {msg_content.decode()}")
             print("message received")
@@ -110,6 +115,7 @@ if __name__ == "__main__":
                       'receiver_seq_dep_map.json', 'receiver_res_dep_map.json']
         )
 
+        cached_ok = False
         if os.path.isdir(to_send_path) and dep_maps_exist:
             print('to_send dir exists')
             # Load the JSON string from the file
@@ -122,6 +128,15 @@ if __name__ == "__main__":
             ip_module = json.loads(ip_module_json)
             session = json.loads(session_index_json)
             file_cfg = retrieve_file_cfg(ip_module)
+
+            # Invalidate cache if device count changed (e.g. added/removed a worker)
+            if len(ip_module) == len(devices):
+                cached_ok = True
+            else:
+                print(f'Cache has {len(ip_module)} device(s) but {len(devices)} registered — re-running optimizer.')
+                ip_module, session, file_cfg = [], [], {}
+
+        if cached_ok:
 
             # sending monitor initiation signal to all the devices
             for ip in ip_graph_requested:

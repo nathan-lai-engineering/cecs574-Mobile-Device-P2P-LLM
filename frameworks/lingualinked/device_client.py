@@ -137,7 +137,41 @@ class DeviceSimulator:
     def _run_monitor(self):
         """Connect to monitor port 34567, send hardware metrics, mirror MonitorService.kt."""
         import struct
+        import socket as tcp_socket
         MONITOR_PORT = 34567
+        BANDWIDTH_PORT = 55555
+
+        # Start TCP bandwidth-test server on port 55555 so Android can connect for measurement.
+        # Accept connections and drain any data sent, matching MonitorService.kt's bandwidth test.
+        def _bandwidth_server():
+            try:
+                srv = tcp_socket.socket(tcp_socket.AF_INET6, tcp_socket.SOCK_STREAM)
+                srv.setsockopt(tcp_socket.SOL_SOCKET, tcp_socket.SO_REUSEADDR, 1)
+                srv.bind(("", BANDWIDTH_PORT))
+                srv.listen(5)
+                srv.settimeout(120)
+                print(f"[{self.local_ip}] BandwidthServer: listening on port {BANDWIDTH_PORT}")
+                while True:
+                    try:
+                        conn, addr = srv.accept()
+                        print(f"[{self.local_ip}] BandwidthServer: connection from {addr}")
+                        conn.settimeout(10)
+                        try:
+                            while conn.recv(65536):
+                                pass
+                        except Exception:
+                            pass
+                        conn.close()
+                    except tcp_socket.timeout:
+                        break
+                    except Exception:
+                        break
+                srv.close()
+            except Exception as e:
+                print(f"[{self.local_ip}] BandwidthServer error: {e}")
+
+        bw_thread = threading.Thread(target=_bandwidth_server, daemon=True)
+        bw_thread.start()
 
         ctx = zmq.Context.instance()
         sock = ctx.socket(zmq.DEALER)
@@ -170,7 +204,11 @@ class DeviceSimulator:
         my_idx = devices.index(self.local_ip) if self.local_ip in devices else 0
 
         # Collect and send metrics in response to "continue"/"stop" signals
+        # Use poll with timeout so we don't hang if monitor server stalls
         while True:
+            if not sock.poll(30000):  # 30s timeout
+                print(f"[{self.local_ip}] Monitor: no signal in 30s — exiting monitor")
+                break
             signal_raw = sock.recv()
             signal = signal_raw.decode().strip()
             print(f"[{self.local_ip}] Monitor signal: {signal}")
@@ -227,12 +265,17 @@ class DeviceSimulator:
         print(f"[{self.local_ip}] Sending Ready...")
         self.root_socket.send_multipart([b"Ready", self.local_ip.encode()])
 
-        # Open — server sends configuration
-        msg = self.root_socket.recv_multipart()
-        if msg[0] != b"Open":
-            print(f"[{self.local_ip}] ERROR: Expected Open, got {msg[0]}")
+        # Open — server sends configuration as 8 separate messages
+        # (root_server.py uses individual send_multipart calls, not one big frame)
+        first = self.root_socket.recv_multipart()
+        if first[0] != b"Open":
+            print(f"[{self.local_ip}] ERROR: Expected Open, got {first[0]}")
             return
-        self._parse_open_config(msg)
+        open_parts = [first[0]]
+        for _ in range(7):
+            part = self.root_socket.recv_multipart()
+            open_parts.append(part[0])
+        self._parse_open_config(open_parts)
 
         # Prepare — model shard download
         msg = self.root_socket.recv_multipart()

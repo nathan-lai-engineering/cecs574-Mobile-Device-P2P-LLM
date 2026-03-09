@@ -374,25 +374,29 @@ class MonitorService : Service(), MonitorActions{
 
     private fun startClient(serverIP: String) {
         var attempt = 0
-        val maxAttempts =10
-        val delayMillis = 5000L
+        val maxAttempts = 3
+        val delayMillis = 2000L
+        val connectTimeoutMs = 5000  // 5s connect timeout instead of OS default ~2 min
         var socket: Socket? = null
-        while (true) {
+        while (attempt < maxAttempts) {
             try {
                 Log.d(mTAG, "trying to connect to server")
-                socket = Socket(serverIP, 55555)
-                Log.d(mTAG, "connect to " + serverIP + "successfully")
+                socket = Socket()
+                socket.connect(java.net.InetSocketAddress(serverIP, 55555), connectTimeoutMs)
+                Log.d(mTAG, "connect to $serverIP successfully")
                 break
-            } catch (e: ConnectException) {
+            } catch (e: Exception) {
                 Log.d(mTAG, "Attempt $attempt failed: ${e.message}. Retrying in ${delayMillis}ms...")
+                socket?.close()
+                socket = null
                 Thread.sleep(delayMillis)
-                attempt ++
+                attempt++
             }
         }
-//        if (attempt == maxAttempts) {
-//            Log.d(mTAG, "Failed to connect after $maxAttempts attempts.")
-//            return
-//        }
+        if (socket == null) {
+            Log.d(mTAG, "Failed to connect to $serverIP after $maxAttempts attempts — skipping bandwidth test.")
+            return
+        }
 
 //        val socket = Socket(serverIP, 9999)
 //        Log.d(mTAG, "Connected to server!")
@@ -416,7 +420,9 @@ class MonitorService : Service(), MonitorActions{
     }
 
     private fun startServer() {
-        val serverSocket = ServerSocket(55555)
+        val serverSocket = ServerSocket()
+        serverSocket.reuseAddress = true
+        serverSocket.bind(java.net.InetSocketAddress(55555))
         Log.d(mTAG, "Server listening on port 55555...")
         val serverBeginTime = System.currentTimeMillis()
 //        val TIMEOUT = 100 * 1000

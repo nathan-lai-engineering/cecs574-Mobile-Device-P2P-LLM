@@ -651,7 +651,12 @@ class ModelCard:
         if not os.path.exists(model_to_send_directory):
             os.makedirs(model_to_send_directory)
 
-        if not os.listdir(model_to_send_directory):
+        existing_device_dirs = [x for x in os.listdir(model_to_send_directory)
+                                if re.search(r'\d+', x) and
+                                os.path.isdir(os.path.join(model_to_send_directory, x))]
+        if not existing_device_dirs or len(existing_device_dirs) != len(module_arrangement):
+            for d in existing_device_dirs:
+                shutil.rmtree(os.path.join(model_to_send_directory, d))
             device_module_assignment_optimized(self.onnx_module_to_split_path, model_to_send_directory,
                                                self.device_module_arrangement, self.quantization_option,
                                                self.sequential_dependency_map,
@@ -659,7 +664,8 @@ class ModelCard:
                                                load_balancing_option=self.load_balancing_option)
 
         device_dir = [f"{model_to_send_directory}/{submodule}" for submodule in
-                      sorted(os.listdir(model_to_send_directory), key=lambda x: int(re.search(r'\d+', x).group(0)))]
+                      sorted([x for x in os.listdir(model_to_send_directory) if re.search(r'\d+', x)],
+                             key=lambda x: int(re.search(r'\d+', x).group(0)))]
 
         print(f'device_dir: {device_dir}')
 
@@ -668,7 +674,8 @@ class ModelCard:
         model_dir = []
         for device_sub_dir in device_dir:
             model_dir.append([f"{device_sub_dir}/{submodule}" for submodule in
-                              sorted(os.listdir(device_sub_dir), key=lambda x: int(re.search(r'\d+', x).group(0)))])
+                              sorted([x for x in os.listdir(device_sub_dir) if re.search(r'\d+', x)],
+                                     key=lambda x: int(re.search(r'\d+', x).group(0)))])
 
         # start zipping model files
         if not self.load_balancing_option:

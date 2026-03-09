@@ -12,7 +12,7 @@ import copy
 from collections import deque
 from .root_server import send_model_file
 
-TIMEOUT = 90
+TIMEOUT = 45
 
 class Monitor:
     monitor_info_map = {}
@@ -232,8 +232,8 @@ class Monitor:
                 #     self.send_monitor_signal(1)
                 #     # self.record_time -= 1
 
-                if time.time() - monitor_start_time > TIMEOUT and self.receive_num == 0:
-                    print("send stop monitor signal")
+                if time.time() - monitor_start_time > TIMEOUT:
+                    print("send stop monitor signal (timeout)")
                     self.receive_monitor = False
                     self.send_monitor_signal(0)
                     self.all_data_ready.set()

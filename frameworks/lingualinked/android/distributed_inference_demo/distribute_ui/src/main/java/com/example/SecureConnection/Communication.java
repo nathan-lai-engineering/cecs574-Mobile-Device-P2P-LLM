@@ -705,12 +705,23 @@ public class Communication {
             System.out.println("No." + receivedId + " Part2 Process Time: " + (System.nanoTime() - startTime) / 1000000000.0);
 
             startTime = System.nanoTime();
-            processAsServer(receivedId);
-            System.out.println("No." + receivedId + " Part3 Process Time: " + (System.nanoTime() - startTime) / 1000000000.0);
+            if (cfg.isHeader() && cfg.isTailer()) {
+                // Single-device: bypass ZMQ loopback deadlock, read token directly from OutputData
+                if (param.task_type.equals("generation")) {
+                    int decode_id = deserializeInt(OutputData.get(receivedId));
+                    InputIds.get(receivedId).add(decode_id);
+                } else {
+                    logits.put(receivedId, OutputData.get(receivedId));
+                }
+                System.out.println("No." + receivedId + " Part3+4 single-device Time: " + (System.nanoTime() - startTime) / 1000000000.0);
+            } else {
+                processAsServer(receivedId);
+                System.out.println("No." + receivedId + " Part3 Process Time: " + (System.nanoTime() - startTime) / 1000000000.0);
 
-            startTime = System.nanoTime();
-            receivedId = obtainResultsFromTailer(receivedId);
-            System.out.println("No." + receivedId + " Part4 Process Time: " + (System.nanoTime() - startTime) / 1000000000.0);
+                startTime = System.nanoTime();
+                receivedId = obtainResultsFromTailer(receivedId);
+                System.out.println("No." + receivedId + " Part4 Process Time: " + (System.nanoTime() - startTime) / 1000000000.0);
+            }
 
             return receivedId;
         }
