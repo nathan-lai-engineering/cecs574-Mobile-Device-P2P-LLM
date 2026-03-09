@@ -9,7 +9,6 @@ services:
     volumes:
       - .:/app                                              # live-edit source without rebuilding
       - C:\CSULB\llama-2-7b:/app/llama-2-7b                # LLaMA-2 weights
-      - C:\CSULB\TinyLlama:/app/TinyLlama                   # TinyLlama weights
     ports:
       - "23456:23456"   # ZMQ ROUTER (device registration + model transfer)
       - "34567:34567"   # monitor port
