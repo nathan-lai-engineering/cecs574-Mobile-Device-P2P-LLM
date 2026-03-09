@@ -12,7 +12,7 @@ import copy
 from collections import deque
 from .root_server import send_model_file
 
-TIMEOUT = 1000
+TIMEOUT = 90
 
 class Monitor:
     monitor_info_map = {}
@@ -181,7 +181,7 @@ class Monitor:
                 if self.socket.poll(1000):
                     print("monitor start receiving results from edges")
                     identifier , action, msg_content = self.socket.recv_multipart()
-                    print("monitor information received")
+                    print(f"monitor information received | action={action!r} frames={len([identifier,action,msg_content])}")
                     if action.decode() == "Monitor":
                         jsonObject = json.loads(msg_content.decode())
                         ip = jsonObject.get("ip")
@@ -324,6 +324,9 @@ class Monitor:
 
     def print_monitor_info(self):
         for ip in self.devices:
+            if ip["ip"] not in self.monitor_info_map:
+                print(f'----------------{ip} no monitor data collected------------------')
+                continue
             print(f'----------------{ip} monitor info------------------')
             print("latency")
             print(self.monitor_info_map[ip["ip"]]["latency"])

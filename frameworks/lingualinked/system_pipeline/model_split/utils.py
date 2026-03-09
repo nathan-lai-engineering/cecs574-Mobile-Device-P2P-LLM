@@ -87,9 +87,15 @@ def create_model_alloc(module_arrangmemt: np.ndarray):
         device_id = module_device_map[module_idxs]
 
         if device_idx + 1 == len(module_arrangmemt):
-            temp_alloc_fixed = [model_alloc[-1][-1], len(module_arrangmemt[device_idx])]
-            model_alloc.append(temp_alloc_fixed)
-            device_model_alloc_map[device_id]["fixed"].append(model_alloc.index(temp_alloc_fixed))
+            # Last device: create one model_alloc entry per module it owns
+            # so device_module_arrangement correctly references each ONNX shard file.
+            device_alloc = module_arrangmemt[device_idx]
+            owned = [j for j in range(len(device_alloc)) if device_alloc[j] == 1]
+            for module_idx in owned:
+                start = model_alloc[-1][-1] if model_alloc else module_idx
+                entry = [start, module_idx + 1]
+                model_alloc.append(entry)
+                device_model_alloc_map[device_id]["fixed"].append(model_alloc.index(entry))
             break
 
         device_alloc = module_arrangmemt[device_idx]

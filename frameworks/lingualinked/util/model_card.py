@@ -477,7 +477,8 @@ class ModelCard:
                     module = onnx_module_loading(f"{self.onnx_module_to_split_path}/module{index}/", index,
                                                  self.quantization_option)
                     input_onnx_types = [node.type.tensor_type.elem_type for node in module.graph.input]
-                    input_tensors = current_inputs
+                    # serialize_tensors expects a list of tensors; wrap if raw numpy array
+                    input_tensors = current_inputs if isinstance(current_inputs, list) else [current_inputs]
                     test_tensor_bytearray = serialize_tensors(input_tensors, input_onnx_types)
                     onnx.save(module, f"{self.onnx_module_to_split_path}/flop_test_module.onnx")
                     bytearray_saving_path = os.path.join(self.onnx_module_to_split_path, "flop_byte_array.bin")

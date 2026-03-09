@@ -1,5 +1,6 @@
 import time
 import zmq
+import numpy as np
 from SecureConnection import root_server
 from SecureConnection import server
 from SecureConnection import monitor
@@ -146,8 +147,18 @@ if __name__ == "__main__":
             thread.start()
 
             num_devices = len(devices)
-            monitor.is_monitor_ready.wait()
-            ping_latency, bandwidths, TotalMem, AvailMem, flop_speed = monitor.get_monitor_info()
+            monitor_responded = monitor.is_monitor_ready.wait(timeout=60)
+            if not monitor_responded:
+                print("WARNING: monitor timed out — using fallback hardware metrics")
+                ping_latency = np.full((num_devices, num_devices), 10.0)
+                np.fill_diagonal(ping_latency, float("inf"))
+                bandwidths   = np.full((num_devices, num_devices), 100.0)
+                np.fill_diagonal(bandwidths, float("inf"))
+                TotalMem  = [4096.0] * num_devices
+                AvailMem  = [2048.0] * num_devices
+                flop_speed = [1000.0] * num_devices
+            else:
+                ping_latency, bandwidths, TotalMem, AvailMem, flop_speed = monitor.get_monitor_info()
 
             mem_threshold = .7  # set threshold for memory
             TotalMem = [m * mem_threshold for m in TotalMem]
