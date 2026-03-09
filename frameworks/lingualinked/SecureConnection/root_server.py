@@ -40,15 +40,17 @@ def communication_open_close(sender, config, status, conditions, lock, open=True
 
             status[client_id] = b'Ready'
 
-            sender.send_multipart([client_id, b'Open',
-                                    config["graph"],
-                                    config["session_index"],
-                                    config["task_type"],
-                                    config["core_pool_size"],
-                                    config["num_sample"],
-                                    config["max_length"],
-                                    json.dumps(config["dependency"]).encode()
-                                   ])
+            # Send each field as a separate message so Android's per-recv() reads succeed.
+            # JeroMQ DEALER treats each send_multipart as one message; packing everything
+            # into a single 9-frame multipart causes recv() to block after the first frame.
+            sender.send_multipart([client_id, b'Open'])
+            sender.send_multipart([client_id, config["graph"]])
+            sender.send_multipart([client_id, config["session_index"]])
+            sender.send_multipart([client_id, config["task_type"]])
+            sender.send_multipart([client_id, config["core_pool_size"]])
+            sender.send_multipart([client_id, config["num_sample"]])
+            sender.send_multipart([client_id, config["max_length"]])
+            sender.send_multipart([client_id, json.dumps(config["dependency"]).encode()])
 
             status[client_id] = b'Open'
             print(f"Status: Open {config['ids'][client_id]}")
