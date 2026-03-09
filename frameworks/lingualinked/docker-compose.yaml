@@ -1,22 +1,15 @@
 services:
-  master:
-    build: .
+  coordinator:
+    image: aether-coordinator          # use pre-built image (run `docker build -t aether-coordinator .` first)
+    container_name: lingualink_node_1
+    stdin_open: true                   # -i
+    tty: true                          # -t
+    working_dir: /app
+    entrypoint: /bin/bash
     volumes:
-      - ./models:/app/models
-    command: ["--role", "master", "--config", "config.yaml"]
-    networks:
-      - linguanet
-
-  worker-1:
-    build: .
-    depends_on:
-      - master
-    volumes:
-      - ./models:/app/models
-    command: ["--role", "worker", "--master_ip", "master"]
-    networks:
-      - linguanet
-
-networks:
-  linguanet:
-    driver: bridge
+      - .:/app                                              # live-edit source without rebuilding
+      - C:\CSULB\llama-2-7b:/app/llama-2-7b                # LLaMA-2 weights
+      - C:\CSULB\TinyLlama:/app/TinyLlama                   # TinyLlama weights
+    ports:
+      - "23456:23456"   # ZMQ ROUTER (device registration + model transfer)
+      - "34567:34567"   # monitor port

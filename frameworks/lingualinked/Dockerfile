@@ -12,6 +12,7 @@ RUN pip install --no-cache-dir "numpy<2" torch==2.0.1 torchvision==0.15.2
 # Install Python dependencies first (better for Docker caching)
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install "transformers==4.33.3"
 
 RUN apt-get update && apt-get install -y patchelf
 RUN find /usr/local/lib/python3.10/site-packages/onnxruntime/capi/ -name "*.so" -exec patchelf --clear-execstack {} +
@@ -25,4 +26,4 @@ COPY . .
 RUN find /usr/local/lib/python3.10/site-packages/onnxruntime -name "*.so" -exec execstack -c {} + || true
 
 # Default entrypoint
-ENTRYPOINT ["python", "root.py"]
+ENTRYPOINT ["/bin/bash"]
