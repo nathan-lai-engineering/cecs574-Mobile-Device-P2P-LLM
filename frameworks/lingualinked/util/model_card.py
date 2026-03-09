@@ -234,13 +234,8 @@ class ModelCard:
         return self.model, self.tokenizer
 
     def get_project_directory(self):
-        current_path = os.path.realpath(__file__)
-        while True:
-            head, tail = os.path.split(current_path)
-            if tail == "LinguaLinked-Inference":  # the name of your project
-                return current_path
-            else:
-                current_path = head
+        # util/model_card.py lives one level below the project root
+        return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
     def is_file_in_directory(self, file_name, directory_path):
         # Get absolute path of file and directory
@@ -293,6 +288,12 @@ class ModelCard:
             else:
                 continue
 
+        # Fallback: if all modules share the same flop count the loop above skips
+        # everything and leaves the index at -1.  Use module 0 in that case.
+        if self.max_flop_module_index_val[0] == -1 and self.module_flop_map:
+            first_key = next(iter(self.module_flop_map))
+            self.max_flop_module_index_val = [first_key, self.module_flop_map[first_key]]
+
         # create input for model export
         project_level_directory = self.get_project_directory()
         onnx_model_directory = os.path.join(project_level_directory, 'onnx_model')
@@ -322,7 +323,7 @@ class ModelCard:
             os.makedirs(onnx_module_path)
         if not os.listdir(onnx_module_path):
             if self.residual_connection and self.split_size >= 2:
-                if sequential_dependency_map and residual_dependency_map:
+                if sequential_dependency_map is not None:
                     torch_to_onnx_residual(module_list=modules,
                                            input=input_for_export,
                                            export_path=onnx_module_path,
@@ -331,7 +332,7 @@ class ModelCard:
                                            transformer_option=self.transformer_model_option,
                                            quantization_option=self.quantization_option)
                 else:
-                    raise RuntimeError(f"Sequential Dependency Map and Residual Dependency Map cannot be None!")
+                    raise RuntimeError(f"Sequential Dependency Map cannot be None!")
             else:
                 torch_to_onnx(modules, input_for_export, onnx_module_path,
                               transformer_option=self.transformer_model_option,

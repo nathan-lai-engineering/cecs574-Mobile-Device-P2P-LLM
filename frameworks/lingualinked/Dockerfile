@@ -14,6 +14,10 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 RUN pip install "transformers==4.33.3"
 
+# Patch LLaMA for GQA support + torch.fx symbolic tracing compatibility
+COPY patch_llama.py .
+RUN python patch_llama.py
+
 RUN apt-get update && apt-get install -y patchelf
 RUN find /usr/local/lib/python3.10/site-packages/onnxruntime/capi/ -name "*.so" -exec patchelf --clear-execstack {} +
 

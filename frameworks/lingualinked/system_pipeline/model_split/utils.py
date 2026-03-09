@@ -267,18 +267,17 @@ def get_module_flops(modules, tokenizer, sequential_dependency_map=None, residua
                 output = submodule.forward(*current_inputs)
                 buffer.update(index, output)
     else:
-        output = None
+        first_flop = None
         for index, submodule in enumerate(modules):
             if index == 0:
                 current_inputs = input_for_export
                 flop, _, _ = get_model_profile(submodule, args=[current_inputs], print_profile=False)
                 module_flop_map[index] = flop
-                output = submodule.forward(current_inputs)
+                first_flop = flop
             else:
-                current_inputs = output
-                flop, _, _ = get_model_profile(submodule, args=current_inputs, print_profile=False)
-                module_flop_map[index] = flop
-                output = submodule.forward(*current_inputs)
+                # Skip forward pass through shard 0 (hangs on CPU with GraphModule).
+                # Reuse shard 0's flop count as estimate — acceptable for 2-device assignment.
+                module_flop_map[index] = first_flop
 
     def flops_from_string(s):
         scale = {

@@ -119,10 +119,104 @@ class DeviceSimulator:
             json.dumps(payload).encode()
         ])
 
-        # Server sends back monitor signal: b"True" or b"False"
+        # Server sends back: b"True" (need monitor) or b"False" (model cached)
         monitor_msg = self.root_socket.recv_multipart()
         need_monitor = monitor_msg[0].decode().strip() == "True"
         print(f"[{self.local_ip}] Registered. Monitor: {need_monitor}")
+
+        if need_monitor:
+            # Consume the second "ready for monitor" message root.py sends
+            ready_msg = self.root_socket.recv_multipart()
+            print(f"[{self.local_ip}] Got: {ready_msg[0].decode()}")
+            self._run_monitor()
+
+    # -----------------------------------------------------------------------
+    # Monitor phase (runs before lifecycle when server sends need_monitor=True)
+    # -----------------------------------------------------------------------
+
+    def _run_monitor(self):
+        """Connect to monitor port 34567, send hardware metrics, mirror MonitorService.kt."""
+        import struct
+        MONITOR_PORT = 34567
+
+        ctx = zmq.Context.instance()
+        sock = ctx.socket(zmq.DEALER)
+        sock.connect(f"tcp://{self.server_ip}:{MONITOR_PORT}")
+        print(f"[{self.local_ip}] Monitor: connected to {self.server_ip}:{MONITOR_PORT}")
+
+        # Send MonitorIP registration
+        payload = json.dumps({"ip": self.local_ip, "role": self.role}).encode()
+        sock.send_multipart([b"MonitorIP", payload])
+        print(f"[{self.local_ip}] Monitor: sent MonitorIP")
+
+        # Receive IP graph
+        ip_graph_bytes = sock.recv()
+        ip_graph = ip_graph_bytes.decode()
+        print(f"[{self.local_ip}] Monitor: ip_graph = {ip_graph}")
+
+        # Receive flop count (4-byte little-endian uint32)
+        flop_bytes = sock.recv()
+        num_flop = struct.unpack("<L", flop_bytes)[0] if len(flop_bytes) == 4 else 0
+        print(f"[{self.local_ip}] Monitor: num_flop = {num_flop}")
+
+        # Receive flop byte array file (drain chunked transfer)
+        self._drain_file_transfer(sock, "flop_byte_array.bin")
+
+        # Receive flop module onnx file
+        self._drain_file_transfer(sock, "flop_module.onnx")
+
+        devices = [d for d in ip_graph.split(",") if d]
+        n = len(devices)
+        my_idx = devices.index(self.local_ip) if self.local_ip in devices else 0
+
+        # Collect and send metrics in response to "continue"/"stop" signals
+        while True:
+            signal_raw = sock.recv()
+            signal = signal_raw.decode().strip()
+            print(f"[{self.local_ip}] Monitor signal: {signal}")
+            if signal == "stop":
+                break
+
+            # Build dummy but plausible metrics
+            latency = [0.0] * n
+            for i in range(n):
+                if i != my_idx:
+                    latency[i] = 5.0 + (abs(i - my_idx) * 2.0)   # ms
+
+            bandwidth = [0.0] * n
+            for i in range(n):
+                if i != my_idx:
+                    bandwidth[i] = 50.0   # MB/s
+
+            import psutil
+            vm = psutil.virtual_memory()
+            total_mem = vm.total / (1024 * 1024)    # MB
+            avail_mem = vm.available / (1024 * 1024)
+
+            flop_speed = 1000.0   # MFLOPS placeholder
+
+            metrics = {
+                "ip": self.local_ip,
+                "latency": json.dumps(latency),
+                "bandwidth": json.dumps(bandwidth),
+                "memory": json.dumps([total_mem, avail_mem]),
+                "flop": flop_speed,
+            }
+            sock.send_multipart([b"Monitor", json.dumps(metrics).encode()])
+            print(f"[{self.local_ip}] Monitor: sent metrics")
+
+        sock.close()
+        print(f"[{self.local_ip}] Monitor: done")
+
+    def _drain_file_transfer(self, sock, label):
+        """Receive a chunked file transfer (empty-frame terminated)."""
+        total = 0
+        while True:
+            chunk = sock.recv()
+            if chunk == b"":
+                break
+            total += len(chunk)
+        print(f"[{self.local_ip}] Monitor: received {label} ({total:,} bytes)")
 
     # -----------------------------------------------------------------------
     # Phase 2: Ready → Open → Prepare → Initialized → Start → Running → Finish
