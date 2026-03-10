@@ -387,7 +387,9 @@ public class Communication {
                 if (cfg.isHeader) {
                     while(sampleId >= input_data.size())
                         Thread.sleep(1000);
-                    int[] data = encodeString(input_data.get(sampleId), tokenizer);
+                    String rawInput = input_data.get(sampleId);
+                    String formattedPrompt = "<|system|>\nYou are a helpful assistant.</s>\n<|user|>\n" + rawInput + "</s>\n<|assistant|>\n";
+                    int[] data = encodeString(formattedPrompt, tokenizer);
                     System.out.println(Arrays.toString(data));
                     this.InputIds.put(sampleId, Utils.convertIntegerArrayToArrayList(data));
                 }
