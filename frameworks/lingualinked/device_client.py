@@ -351,22 +351,19 @@ class DeviceSimulator:
 
         print(f"[{self.local_ip}] Downloading model shard...")
         zip_path = self.model_dir / "module.zip"
-        chunks = []
-
-        while True:
-            chunk_msg = self.root_socket.recv_multipart()
-            chunk = chunk_msg[0]
-            if chunk == b"":
-                break
-            chunks.append(chunk)
-            total = sum(len(c) for c in chunks)
-            print(f"[{self.local_ip}]   {total:,} bytes received...", end="\r")
-
-        data = b"".join(chunks)
-        print(f"\n[{self.local_ip}] Download complete: {len(data):,} bytes")
+        total = 0
 
         with open(zip_path, "wb") as f:
-            f.write(data)
+            while True:
+                chunk_msg = self.root_socket.recv_multipart()
+                chunk = chunk_msg[0]
+                if chunk == b"":
+                    break
+                f.write(chunk)
+                total += len(chunk)
+                print(f"[{self.local_ip}]   {total:,} bytes received...", end="\r")
+
+        print(f"\n[{self.local_ip}] Download complete: {total:,} bytes")
 
         print(f"[{self.local_ip}] Extracting {zip_path.name}...")
         with zipfile.ZipFile(zip_path, "r") as z:
