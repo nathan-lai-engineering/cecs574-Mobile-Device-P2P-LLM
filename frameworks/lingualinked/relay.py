@@ -15,7 +15,7 @@ import threading
 import time
 import argparse
 
-PORTS = [12346, 55555]       # Android->A1: forward to a1_ip on same port
+PORTS = [12346, 55555, 12350] # Android->A1: forward to a1_ip on same port (12350 = tensor PUSH)
 ANDROID_RELAY_PORT = 12348   # A1->Android: A1 connects here
 ANDROID_ADB_PORT   = 12347   # adb forward tcp:12347 tcp:12346 must be running
 

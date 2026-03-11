@@ -388,7 +388,7 @@ public class Communication {
                     while(sampleId >= input_data.size())
                         Thread.sleep(1000);
                     String rawInput = input_data.get(sampleId);
-                    String formattedPrompt = "<|system|>\nYou are a helpful assistant.</s>\n<|user|>\n" + rawInput + "</s>\n<|assistant|>\n";
+                    String formattedPrompt = "<|user|>\n" + rawInput + "</s>\n<|assistant|>\n";
                     int[] data = encodeString(formattedPrompt, tokenizer);
                     System.out.println(Arrays.toString(data));
                     this.InputIds.put(sampleId, Utils.convertIntegerArrayToArrayList(data));
@@ -529,6 +529,8 @@ public class Communication {
                     try {
                         receivedId = new OneStep(this.sample_id, serverSocket, clientSocket).run();
 
+                        if (receivedId == -1) break;  // EOS — skip UI update
+
                         if (cfg.isHeader()) {
                             // Synchronize the decoded string in data-repo for UI - Junchen
                             input_size = Math.min(input_size, InputIds.get(receivedId).size());
@@ -544,11 +546,6 @@ public class Communication {
                     } catch (InterruptedException | JSONException e) {
                         throw new RuntimeException(e);
                     }
-//
-////                    // Break for </s> token
-//                    if (receivedId == -1){
-//                        break;
-//                    }
 
                     System.out.println("Token Process Time: " + (System.nanoTime() - startTime) / 1000000000.0);
                 }
@@ -627,43 +624,33 @@ public class Communication {
         }
 
         public void processAsServer(int receivedId) throws InterruptedException {
-            // return data to the header machine;
-            if (clientSocket == null)
+            // Push intermediate tensor directly to VM's PULL socket (no "Request Data" handshake needed).
+            // clientSocket is now a PUSH socket connecting to VM's IP:pushPort.
+            if (clientSocket == null) {
                 System.out.println("ProcessAsServer Error");
-
-            System.out.println("Start to be a Server");
-            byte[] comefrom_id = clientSocket.recv(0);
-            byte[] msgTo = clientSocket.recv(0);
-            System.out.println(new String(msgTo));
+                return;
+            }
+            System.out.println("Start to be a Server (pushing tensor)");
             System.out.println("Thread id " + this.sample_id);
             System.out.println(receivedId);
-            System.out.println(OutputData);
-            if (new String(msgTo).contains("Request Data")) {
-                if (OutputData.containsKey(receivedId)) {
-                    byte[] id = "from".getBytes();
-                    Thread workerThread = new Thread(new SendResidualConnection(receivedId, clientSocketMap));
-                    workerThread.start();
-                    id = Utils.convertIntToByteArray(receivedId);
-                    clientSocket.sendMore(comefrom_id);
-                    clientSocket.sendMore(id);
-                    System.out.println("No. " + receivedId + " " + new String(msgTo));
-                    if (cfg.isTailer() && (param.task_type.equals("generation"))) {
-                        byte[] decode_id = OutputData.get(receivedId);
-                        clientSocket.send(decode_id, 0);
-                    } else {
-                        clientSocket.send(OutputData.get(receivedId), 0);
-                        System.out.println(OutputData.get(receivedId));
-                    }
-//                    workerThread.join();
+            if (OutputData.containsKey(receivedId)) {
+                byte[] id = Utils.convertIntToByteArray(receivedId);
+                int seqLen = (InputIds.containsKey(receivedId) && InputIds.get(receivedId) != null)
+                        ? InputIds.get(receivedId).size() : 0;
+                byte[] seqLenBytes = java.nio.ByteBuffer.allocate(4)
+                        .order(java.nio.ByteOrder.LITTLE_ENDIAN).putInt(seqLen).array();
+                int tensorSize = OutputData.get(receivedId) != null ? OutputData.get(receivedId).length : 0;
+                Log.d(TAG, "processAsServer: pushing tensor size=" + tensorSize + " seqLen=" + seqLen + " receivedId=" + receivedId);
+                clientSocket.sendMore(id);
+                clientSocket.sendMore(seqLenBytes);
+                System.out.println("No. " + receivedId + " pushing tensor seqLen=" + seqLen);
+                if (cfg.isTailer() && (param.task_type.equals("generation"))) {
+                    clientSocket.send(OutputData.get(receivedId), 0);
                 } else {
-//                    if (receivedId == -1){
-//                        byte[] id = Utils.convertIntToByteArray(receivedId);
-//                        clientSocket.sendMore(comefrom_id);
-//                        clientSocket.send(id);
-//                        return;
-//                    }
-                    System.out.println(receivedId + " is not in the OutputData");
+                    clientSocket.send(OutputData.get(receivedId), 0);
                 }
+            } else {
+                System.out.println(receivedId + " is not in the OutputData");
             }
         }
 
@@ -686,6 +673,11 @@ public class Communication {
 //                    InputIds.get(receivedId).add(decode_id);
                     int decode_id = deserializeInt(res);
                     InputIds.get(receivedId).add(decode_id);
+                    Log.d(TAG, "token_id=" + decode_id);
+                    if (decode_id == 2) {  // EOS </s>
+                        Log.d(TAG, "EOS received — stopping generation");
+                        return -1;
+                    }
                 } else {
                     logits.put(receivedId, res);
                 }
@@ -737,8 +729,11 @@ public class Communication {
             ArrayList<Map<Integer, Socket>> socketContainer = new ArrayList<>();
             Map<Integer, Socket> SendSocket = new HashMap<>();
             for (Integer idx : sendDeviceIndex) {
-                Socket temp = beServer.establish_connection(context, SocketType.ROUTER, Config.port + j*i + (idx-cfg.deviceId));
-                temp.setIdentity(("ROUTER Send From " + cfg.deviceId + " to " + idx + "." + (Config.port + j*i + (idx-cfg.deviceId))).getBytes());
+                // Use PUSH connecting to VM's PULL socket directly (Android→VM direction).
+                // Port offset +4 matches device_client.py pull_port = BASE_PORT + (device_id - from_device_id) + 4.
+                // This avoids the relay:12348→ADB:12347 path which breaks after the first large tensor transfer.
+                int pushPort = Config.port + j*i + (idx - cfg.deviceId) + 4;
+                Socket temp = beClient.establish_connection(context, SocketType.PUSH, pushPort, cfg.ipGraph[idx]);
                 SendSocket.put(idx, temp);
             }
 

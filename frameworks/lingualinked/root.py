@@ -16,7 +16,7 @@ from system_pipeline.onnx_backend.optimization import Optimizer
 monitor_receive_interval = 5  # set intervals for receiving monitor info from clients
 monitor_port = "34567"  # set server port to receive monitor info
 TIMEOUT = 1  # Time to wait for new devices to connect to servers
-MODEL_EXIST_ON_DEVICE = True  # set True if the model exists on the mobile device, will skip model creation and transmission
+MODEL_EXIST_ON_DEVICE = False  # set True if the model exists on the mobile device, will skip model creation and transmission
 runtime_option = False  # set True if the load balance is runtime
 Quntization_Option = False
 task = "Generation"
@@ -298,9 +298,9 @@ if __name__ == "__main__":
     print(f"session index: {session}")
 
     config = {"file_path": file_cfg,
-              "num_sample": b'1000',
+              "num_sample": b'1',
               "num_device": len(devices),
-              "max_length": b'40',
+              "max_length": b'100',
               "task_type": "generation".encode('utf-8'),
               "core_pool_size": b'1',
               "head_node": ip_graph[0],

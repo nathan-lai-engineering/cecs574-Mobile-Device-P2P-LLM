@@ -80,6 +80,7 @@ class DeviceSimulator:
         # Inter-device tensor buffers: sample_id -> bytes
         self.output_data = {}
         self._data_ready = {}       # sample_id -> threading.Event
+        self._seq_len = {}          # sample_id -> int (real token count from Android)
 
         self.model_dir = Path(model_dir) if model_dir else Path(f"./device_models/{local_ip.replace('.', '_')}")
         self.model_dir.mkdir(parents=True, exist_ok=True)
@@ -382,20 +383,45 @@ class DeviceSimulator:
             print(f"[{self.local_ip}] onnxruntime unavailable — passthrough mode.")
             return
 
-        onnx_files = sorted(self.model_dir.rglob("*.onnx"))
+        # Prefer INT8-quantized models if present (e.g. module_int8.onnx over module.onnx)
+        all_onnx = sorted(self.model_dir.rglob("*.onnx"))
+        # Build a deduplicated list: for each base stem prefer *_int8 variant
+        seen_stems = {}
+        for p in all_onnx:
+            base = p.stem.replace("_int8", "")
+            if p.stem.endswith("_int8"):
+                seen_stems[base] = p          # int8 wins
+            elif base not in seen_stems:
+                seen_stems[base] = p
+        onnx_files = sorted(seen_stems.values())
+
         if not onnx_files:
             print(f"[{self.local_ip}] WARNING: No .onnx files in {self.model_dir}. Passthrough mode.")
             return
 
+        ncpu = os.cpu_count() or 4
         opts = ort.SessionOptions()
-        opts.intra_op_num_threads = os.cpu_count() or 4
-        opts.inter_op_num_threads = os.cpu_count() or 4
+        opts.intra_op_num_threads = ncpu
+        opts.inter_op_num_threads = ncpu
         opts.execution_mode = ort.ExecutionMode.ORT_PARALLEL
         opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+        opts.enable_mem_pattern = True
+        opts.enable_cpu_mem_arena = True
+
+        # Prefer AVX2/AVX-512 path on x86-64; fall back to plain CPU
+        providers = ["CPUExecutionProvider"]
+        try:
+            available = ort.get_available_providers()
+            for ep in ["OpenVINOExecutionProvider", "DnnlExecutionProvider"]:
+                if ep in available:
+                    providers.insert(0, ep)
+                    break
+        except Exception:
+            pass
 
         for path in onnx_files:
-            print(f"[{self.local_ip}] Loading {path.name}...")
-            sess = ort.InferenceSession(str(path), sess_options=opts)
+            print(f"[{self.local_ip}] Loading {path.name} (providers={providers})...")
+            sess = ort.InferenceSession(str(path), sess_options=opts, providers=providers)
             self.sessions.append(sess)
             ins  = [i.name for i in sess.get_inputs()]
             outs = [o.name for o in sess.get_outputs()]
@@ -493,15 +519,37 @@ class DeviceSimulator:
                     latest_identity = identity  # track freshest ZMQ routing identity
 
                     # Wait for ONNX to finish. Keep updating latest_identity so we always
-                    # have the most recently seen routing ID (ROUTER_HANDOVER ensures A1's
+                    # have the most recently seen routing ID (ROUTER_HANDOVER ensures
                     # routing table is updated whenever Android's DEALER reconnects).
+                    # If the relay pipe dies and the tensor never arrives, the event never
+                    # fires — detect this and send EOS (token 2) to unblock Android.
+                    DEADLOCK_TIMEOUT_S = 90
+                    total_wait_s = 0
+                    timed_out = False
                     while not event.wait(timeout=1):
+                        total_wait_s += 1
                         while router.poll(0):
                             nf = router.recv_multipart()
                             nr = nf[1] if len(nf) > 1 else b""
                             ns = int(nf[2].decode()) if len(nf) > 2 else 0
                             if nr.lower() == b"request data" and ns == sample_id:
                                 latest_identity = nf[0]
+                        if total_wait_s >= DEADLOCK_TIMEOUT_S:
+                            print(f"[{self.local_ip}] DEADLOCK: token event stalled {DEADLOCK_TIMEOUT_S}s "
+                                  f"— relay pipe likely dead. Sending EOS to unblock Android.")
+                            import struct as _struct
+                            time.sleep(0.1)
+                            router.send_multipart([
+                                latest_identity,
+                                sample_id.to_bytes(4, "little"),
+                                _struct.pack('<i', 2),  # EOS = token 2 in LLaMA vocab
+                            ])
+                            event.clear()
+                            timed_out = True
+                            break
+
+                    if timed_out:
+                        continue  # skip normal response; next iteration waits for fresh request
 
                     # ONNX done. Drain all stale queued messages, still updating identity
                     # to the absolute latest connection seen.
@@ -524,9 +572,17 @@ class DeviceSimulator:
                     if self.is_tailer and requester_id == 0 and self.task_type == "generation":
                         import numpy as np, struct
                         arr = np.frombuffer(raw_bytes, dtype=np.float32)
-                        arr_last = arr[-32000:] if len(arr) >= 32000 else arr
+                        vocab_size = 32000
+                        seq_len = self._seq_len.get(sample_id, 0)
+                        total_elems = len(arr)
+                        if seq_len > 0 and total_elems >= seq_len * vocab_size:
+                            # Pick logits at the last real token position (right-padded model)
+                            arr_last = arr[(seq_len - 1) * vocab_size : seq_len * vocab_size]
+                        else:
+                            # Fallback: last vocab_size elements
+                            arr_last = arr[-vocab_size:] if total_elems >= vocab_size else arr
                         token_id = int(np.argmax(arr_last))
-                        print(f"[{self.local_ip}] logit stats: min={arr_last.min():.3f} max={arr_last.max():.3f} top5={np.argsort(arr_last)[-5:][::-1].tolist()}")
+                        print(f"[{self.local_ip}] logit pos={seq_len-1} stats: min={arr_last.min():.3f} max={arr_last.max():.3f} top5={np.argsort(arr_last)[-5:][::-1].tolist()}")
                         response_bytes = struct.pack('<i', token_id)
                         print(f"[{self.local_ip}] Serving token_id={token_id} to header")
                     else:
@@ -534,9 +590,9 @@ class DeviceSimulator:
 
                     # Android's obtainResultsFromTailer sends ONE "Request Data" then
                     # blocks on recv(0) forever — no retry.  We must send to latest_identity.
-                    # Sleep 1.5s so that if the relay dropped the connection during the
-                    # 63s ONNX idle, ZMQ DEALER has time to auto-reconnect and
-                    # ROUTER_HANDOVER can refresh its routing-table entry to the new conn.
+                    # Sleep 1.5s so that if the relay dropped the connection during
+                    # ONNX, ZMQ DEALER has time to auto-reconnect and ROUTER_HANDOVER
+                    # can refresh its routing-table entry to the new connection.
                     time.sleep(1.5)
                     router.send_multipart([
                         latest_identity,
@@ -687,22 +743,19 @@ class DeviceSimulator:
     def _worker_inference_loop(self, graph_len):
         import numpy as np
         from_device_id = self.device_id - 1
-        print(f"[{self.local_ip}] Worker ready — waiting for data from device {from_device_id}.")
+        print(f"[{self.local_ip}] Worker ready — waiting for tensor pushes from device {from_device_id}.")
 
-        # Create ONE persistent DEALER for the entire inference session.
-        # Android's updateSockets() does the same: one socket per thread, reused
-        # across all token steps.  Creating a new socket per step leaves stale
-        # "Request Data" frames in Android's ROUTER queue; when Android finally
-        # responds it picks up the oldest (dead) peer and the live DEALER never
-        # sees the reply.
         ctx = zmq.Context.instance()
-        pull_dealer = ctx.socket(zmq.DEALER)
-        port = BASE_PORT + graph_len * 0 + (self.device_id - from_device_id)
-        target_ip, port_override = self._resolve_ip(self.ip_graph[from_device_id])
-        actual_port = port_override if port_override is not None else port
-        pull_dealer.connect(f"tcp://{target_ip}:{actual_port}")
-        print(f"[{self.local_ip}] Pull DEALER connected to device {from_device_id} "
-              f"at {target_ip}:{actual_port}")
+        # Bind a PULL socket that Android PUSHes tensors to directly (Android→VM direction).
+        # Port = BASE_PORT + (device_id - from_device_id) + 4.
+        # This avoids the relay:12348→ADB:12347→Android:12346 path which fails for step 1+
+        # because the Android emulator's ADB TCP tunnel breaks after the first large transfer.
+        # Android→VM works reliably (same direction as obtainResultsFromTailer).
+        pull_port = BASE_PORT + (self.device_id - from_device_id) + 4  # e.g. 12350 (graph_len unused here)
+        pull_sock = ctx.socket(zmq.PULL)
+        pull_sock.setsockopt(zmq.LINGER, 0)
+        pull_sock.bind(f"tcp://0.0.0.0:{pull_port}")
+        print(f"[{self.local_ip}] PULL socket bound at 0.0.0.0:{pull_port} — Android PUSHes tensors here")
 
         # For generation tasks Android uses the same sample_id for every token step of
         # a given prompt.
@@ -716,14 +769,11 @@ class DeviceSimulator:
         try:
             for step in range(total_steps):
                 sample_id = step // steps_per_sample
-
-                # Send exactly ONE "Request Data" per step on the persistent DEALER.
-                pull_dealer.send_multipart([b"Request Data"])
-                print(f"[{self.local_ip}] Sent 'Request Data' for step {step}, waiting for tensor...")
+                print(f"[{self.local_ip}] Waiting for tensor push for step {step}...")
 
                 # Poll in 30s chunks so we get heartbeat logs if Android is slow
                 waited = 0
-                while not pull_dealer.poll(30_000):
+                while not pull_sock.poll(30_000):
                     waited += 30
                     if waited >= 600:
                         print(f"[{self.local_ip}] FATAL: No tensor after 10 min for step {step}. Aborting.")
@@ -734,10 +784,18 @@ class DeviceSimulator:
                 if waited is not None and waited >= 600:
                     break
 
-                frames = pull_dealer.recv_multipart()
+                frames = pull_sock.recv_multipart()
                 print(f"[{self.local_ip}] Received {len(frames)} frame(s) for step {step}, sizes={[len(f) for f in frames]}")
-                # Android sends [id_4bytes, tensor_bytes]; DEALER strips the ROUTER identity.
-                input_bytes = frames[1] if len(frames) >= 2 else b""
+                # Android sends [id_4bytes, seqLen_4bytes, tensor_bytes]
+                if len(frames) >= 3:
+                    import struct as _struct
+                    seq_len = _struct.unpack('<i', frames[1])[0] if len(frames[1]) == 4 else 0
+                    input_bytes = frames[2]
+                else:
+                    seq_len = 0
+                    input_bytes = frames[1] if len(frames) >= 2 else b""
+                self._seq_len[sample_id] = seq_len
+                print(f"[{self.local_ip}] seq_len={seq_len} for sample {sample_id} step {step}")
                 if not input_bytes:
                     print(f"[{self.local_ip}] WARNING: Empty tensor for step {step}. Skipping.")
                     continue
@@ -751,7 +809,7 @@ class DeviceSimulator:
                 if self.is_tailer and self.task_type != "generation":
                     self._print_result(output_bytes)
         finally:
-            pull_dealer.close()
+            pull_sock.close()
 
     @staticmethod
     def _deserialize_tensor_vector(data: bytes):
