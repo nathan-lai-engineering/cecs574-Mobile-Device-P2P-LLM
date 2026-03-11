@@ -581,10 +581,11 @@ class DeviceSimulator:
                         else:
                             # Fallback: last vocab_size elements
                             arr_last = arr[-vocab_size:] if total_elems >= vocab_size else arr
+                        t_logit = time.time()
                         token_id = int(np.argmax(arr_last))
                         print(f"[{self.local_ip}] logit pos={seq_len-1} stats: min={arr_last.min():.3f} max={arr_last.max():.3f} top5={np.argsort(arr_last)[-5:][::-1].tolist()}")
                         response_bytes = struct.pack('<i', token_id)
-                        print(f"[{self.local_ip}] Serving token_id={token_id} to header")
+                        print(f"[{self.local_ip}] Serving token_id={token_id} to header (logit→argmax: {time.time()-t_logit:.4f}s)")
                     else:
                         response_bytes = raw_bytes
 
@@ -594,12 +595,13 @@ class DeviceSimulator:
                     # ONNX, ZMQ DEALER has time to auto-reconnect and ROUTER_HANDOVER
                     # can refresh its routing-table entry to the new connection.
                     time.sleep(1.5)
+                    t_send = time.time()
                     router.send_multipart([
                         latest_identity,
                         sample_id.to_bytes(4, "little"),
                         response_bytes,
                     ])
-                    print(f"[{self.local_ip}] Delivered response to latest identity")
+                    print(f"[{self.local_ip}] Token delivered (send took {time.time()-t_send:.4f}s)")
 
                     # Clear the event so the next token step's wait() blocks correctly.
                     event.clear()
@@ -785,6 +787,7 @@ class DeviceSimulator:
                     break
 
                 frames = pull_sock.recv_multipart()
+                t_tensor_recv = time.time()
                 print(f"[{self.local_ip}] Received {len(frames)} frame(s) for step {step}, sizes={[len(f) for f in frames]}")
                 # Android sends [id_4bytes, seqLen_4bytes, tensor_bytes]
                 if len(frames) >= 3:
@@ -801,6 +804,8 @@ class DeviceSimulator:
                     continue
 
                 output_bytes = self._run_onnx_worker(input_bytes, sample_id)
+                t_onnx_done = time.time()
+                print(f"[{self.local_ip}] Step {step} VM inference: {t_onnx_done - t_tensor_recv:.3f}s (deserialize+ONNX)")
 
                 event = self._data_ready.setdefault(sample_id, threading.Event())
                 self.output_data[sample_id] = output_bytes

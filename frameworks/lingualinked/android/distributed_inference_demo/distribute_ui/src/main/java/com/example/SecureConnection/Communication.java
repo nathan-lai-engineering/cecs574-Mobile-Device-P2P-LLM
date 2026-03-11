@@ -523,13 +523,20 @@ public class Communication {
                 int receivedId = sampleId;
                 int input_size = param.max_length;
 
+                long firstTokenStart = System.nanoTime();
+
                 for (int m = 0; m < param.max_length; m++) {
-                    long startTime = System.nanoTime();
+                    long stepStart = System.nanoTime();
                     System.out.println("++++++++++++SampleID: " + sample_id + "++++++++++TokenID:" + m);
                     try {
                         receivedId = new OneStep(this.sample_id, serverSocket, clientSocket).run();
 
                         if (receivedId == -1) break;  // EOS — skip UI update
+
+                        if (m == 0) {
+                            double ttft = (System.nanoTime() - firstTokenStart) / 1e9;
+                            System.out.println("=== TIME TO FIRST TOKEN: " + String.format("%.3f", ttft) + "s ===");
+                        }
 
                         if (cfg.isHeader()) {
                             // Synchronize the decoded string in data-repo for UI - Junchen
@@ -547,7 +554,7 @@ public class Communication {
                         throw new RuntimeException(e);
                     }
 
-                    System.out.println("Token Process Time: " + (System.nanoTime() - startTime) / 1000000000.0);
+                    System.out.println("Token " + m + " total time: " + String.format("%.3f", (System.nanoTime() - stepStart) / 1e9) + "s");
                 }
                 cleanUpBuffer(this.sample_id);
             }
@@ -696,7 +703,7 @@ public class Communication {
             startTime = System.nanoTime();
             inferenceProcedure(receivedId);
 
-            System.out.println("No." + receivedId + " Part2 Process Time: " + (System.nanoTime() - startTime) / 1000000000.0);
+            System.out.println("No." + receivedId + " Part2 [Android ONNX inference]: " + String.format("%.4f", (System.nanoTime() - startTime) / 1e9) + "s");
 
             startTime = System.nanoTime();
             if (cfg.isHeader() && cfg.isTailer()) {
@@ -710,11 +717,11 @@ public class Communication {
                 System.out.println("No." + receivedId + " Part3+4 single-device Time: " + (System.nanoTime() - startTime) / 1000000000.0);
             } else {
                 processAsServer(receivedId);
-                System.out.println("No." + receivedId + " Part3 Process Time: " + (System.nanoTime() - startTime) / 1000000000.0);
+                System.out.println("No." + receivedId + " Part3 [net-out: tensor push to VM]: " + String.format("%.4f", (System.nanoTime() - startTime) / 1e9) + "s");
 
                 startTime = System.nanoTime();
                 receivedId = obtainResultsFromTailer(receivedId);
-                System.out.println("No." + receivedId + " Part4 Process Time: " + (System.nanoTime() - startTime) / 1000000000.0);
+                System.out.println("No." + receivedId + " Part4 [net-in+VM ONNX: wait for token]: " + String.format("%.4f", (System.nanoTime() - startTime) / 1e9) + "s");
             }
 
             return receivedId;
