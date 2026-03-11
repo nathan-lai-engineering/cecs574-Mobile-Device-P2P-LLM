@@ -31,6 +31,9 @@ class Monitor:
         self.byte_array_path = byte_array_path
         self.flop_module_path = flop_module_path
         self.num_flop = num_flop
+        self.model_info_ready = threading.Event()
+        if byte_array_path is not None and flop_module_path is not None:
+            self.model_info_ready.set()  # already have info, no need to wait
         self.ip_graph_requested = []
         self.socket = None
         self.latency = None
@@ -43,7 +46,7 @@ class Monitor:
         self.is_monitor_ready = threading.Event()
         self.all_data_ready = threading.Event()
         self.runtime_option = runtime_option
-        self.record_time = 5
+        self.record_time = 1
         self.devices = devices
         self.lock = threading.Lock() # Lock for synchronizing access to shared resources
     
@@ -243,7 +246,7 @@ class Monitor:
             # Optionally add any cleanup code you need here
             sys.exit(0)
 
-        socket.close()
+        self.socket.close()
         context.term()
 
     def updateMonitorInfo(self, ip, latency_arr, bandwidth_arr, total_mem, avail_mem, flop):
@@ -292,7 +295,16 @@ class Monitor:
         for request_address in self.ip_graph_requested:
             self.socket.send_multipart([request_address, signal])
 
+    def set_model_info(self, byte_array_path, flop_module_path, num_flop):
+        """Called from root.py after model preparation completes to unblock sendIPGraph."""
+        self.byte_array_path = byte_array_path
+        self.flop_module_path = flop_module_path
+        self.num_flop = num_flop
+        self.model_info_ready.set()
+
     def sendIPGraph(self):
+        print("monitor waiting for model info before sending IP graph...")
+        self.model_info_ready.wait()
         print("monitor send IP back")
         graph = []
         for index, d in enumerate(self.devices):

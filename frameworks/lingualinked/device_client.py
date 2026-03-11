@@ -50,7 +50,7 @@ ROOT_PORT = 23456   # Root server ZMQ port
 class DeviceSimulator:
 
     def __init__(self, role, local_ip, server_ip, model_name=None,
-                 server_port=ROOT_PORT, ip_map=None):
+                 server_port=ROOT_PORT, ip_map=None, model_dir=None):
         self.role = role                    # 'header' or 'worker'
         self.local_ip = local_ip
         self.server_ip = server_ip
@@ -81,7 +81,7 @@ class DeviceSimulator:
         self.output_data = {}
         self._data_ready = {}       # sample_id -> threading.Event
 
-        self.model_dir = Path(f"./device_models/{local_ip.replace('.', '_')}")
+        self.model_dir = Path(model_dir) if model_dir else Path(f"./device_models/{local_ip.replace('.', '_')}")
         self.model_dir.mkdir(parents=True, exist_ok=True)
 
         self._running = False
@@ -125,9 +125,6 @@ class DeviceSimulator:
         print(f"[{self.local_ip}] Registered. Monitor: {need_monitor}")
 
         if need_monitor:
-            # Consume the second "ready for monitor" message root.py sends
-            ready_msg = self.root_socket.recv_multipart()
-            print(f"[{self.local_ip}] Got: {ready_msg[0].decode()}")
             self._run_monitor()
 
     # -----------------------------------------------------------------------
@@ -145,9 +142,9 @@ class DeviceSimulator:
         # Accept connections and drain any data sent, matching MonitorService.kt's bandwidth test.
         def _bandwidth_server():
             try:
-                srv = tcp_socket.socket(tcp_socket.AF_INET6, tcp_socket.SOCK_STREAM)
+                srv = tcp_socket.socket(tcp_socket.AF_INET, tcp_socket.SOCK_STREAM)
                 srv.setsockopt(tcp_socket.SOL_SOCKET, tcp_socket.SO_REUSEADDR, 1)
-                srv.bind(("", BANDWIDTH_PORT))
+                srv.bind(("0.0.0.0", BANDWIDTH_PORT))
                 srv.listen(5)
                 srv.settimeout(120)
                 print(f"[{self.local_ip}] BandwidthServer: listening on port {BANDWIDTH_PORT}")
@@ -325,7 +322,13 @@ class DeviceSimulator:
         self.max_length      = int(msg[6].decode())
         self.dependency      = json.loads(msg[7].decode())
 
-        self.device_id  = self.ip_graph.index(self.local_ip)
+        if self.local_ip in self.ip_graph:
+            self.device_id = self.ip_graph.index(self.local_ip)
+        else:
+            # Coordinator cache may have an old IP — infer position by role
+            self.device_id = 0 if self.role == "header" else len(self.ip_graph) - 1
+            print(f"[{self.local_ip}] WARNING: IP not in graph {self.ip_graph}, "
+                  f"inferring device_id={self.device_id} from role '{self.role}'")
         n               = len(self.ip_graph)
         self.is_header  = (self.device_id == 0)
         self.is_tailer  = (self.device_id == n - 1)
@@ -384,9 +387,15 @@ class DeviceSimulator:
             print(f"[{self.local_ip}] WARNING: No .onnx files in {self.model_dir}. Passthrough mode.")
             return
 
+        opts = ort.SessionOptions()
+        opts.intra_op_num_threads = os.cpu_count() or 4
+        opts.inter_op_num_threads = os.cpu_count() or 4
+        opts.execution_mode = ort.ExecutionMode.ORT_PARALLEL
+        opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+
         for path in onnx_files:
             print(f"[{self.local_ip}] Loading {path.name}...")
-            sess = ort.InferenceSession(str(path))
+            sess = ort.InferenceSession(str(path), sess_options=opts)
             self.sessions.append(sess)
             ins  = [i.name for i in sess.get_inputs()]
             outs = [o.name for o in sess.get_outputs()]
@@ -456,6 +465,7 @@ class DeviceSimulator:
         """Serve tensor data requests on a ROUTER socket."""
         ctx = zmq.Context.instance()
         router = ctx.socket(zmq.ROUTER)
+        router.setsockopt(zmq.ROUTER_HANDOVER, 1)  # accept re-connections, update identity
         bind_addr = f"tcp://{self.local_ip}:{port}"
         try:
             router.bind(bind_addr)
@@ -465,27 +475,90 @@ class DeviceSimulator:
 
         print(f"[{self.local_ip}] Serving on port {port} for device {requester_id}")
 
+        _hb = 0
         while self._running:
+            _hb += 1
+            if _hb % 10 == 0:
+                print(f"[{self.local_ip}] _bind_router port={port} still waiting ({_hb}s)...")
             if router.poll(1000):
                 frames = router.recv_multipart()
                 identity = frames[0]
                 request  = frames[1] if len(frames) > 1 else b""
                 sample_id = int(frames[2].decode()) if len(frames) > 2 else 0
+                print(f"[{self.local_ip}] _bind_router port={port} got frames={len(frames)} req={request}")
 
-                if request == b"Request data":
+                # Android sends "Request Data" (uppercase D); match it case-insensitively
+                if request.lower() == b"request data":
                     event = self._data_ready.setdefault(sample_id, threading.Event())
-                    event.wait(timeout=60)
-                    tensor_bytes = self.output_data.get(sample_id, bytes(16))
+                    latest_identity = identity  # track freshest ZMQ routing identity
+
+                    # Wait for ONNX to finish. Keep updating latest_identity so we always
+                    # have the most recently seen routing ID (ROUTER_HANDOVER ensures A1's
+                    # routing table is updated whenever Android's DEALER reconnects).
+                    while not event.wait(timeout=1):
+                        while router.poll(0):
+                            nf = router.recv_multipart()
+                            nr = nf[1] if len(nf) > 1 else b""
+                            ns = int(nf[2].decode()) if len(nf) > 2 else 0
+                            if nr.lower() == b"request data" and ns == sample_id:
+                                latest_identity = nf[0]
+
+                    # ONNX done. Drain all stale queued messages, still updating identity
+                    # to the absolute latest connection seen.
+                    drained = 0
+                    while router.poll(0):
+                        nf = router.recv_multipart()
+                        nr = nf[1] if len(nf) > 1 else b""
+                        ns = int(nf[2].decode()) if len(nf) > 2 else 0
+                        if nr.lower() == b"request data" and ns == sample_id:
+                            latest_identity = nf[0]
+                        drained += 1
+                    if drained:
+                        print(f"[{self.local_ip}] Drained {drained} stale queued messages after ONNX")
+
+                    raw_bytes = self.output_data.get(sample_id, bytes(16))
+
+                    # For tailer returning results to header in generation mode:
+                    # Android calls deserializeInt(res) expecting a 4-byte little-endian int32
+                    # (the predicted next-token ID).  Convert logits → argmax token_id.
+                    if self.is_tailer and requester_id == 0 and self.task_type == "generation":
+                        import numpy as np, struct
+                        arr = np.frombuffer(raw_bytes, dtype=np.float32)
+                        arr_last = arr[-32000:] if len(arr) >= 32000 else arr
+                        token_id = int(np.argmax(arr_last))
+                        print(f"[{self.local_ip}] logit stats: min={arr_last.min():.3f} max={arr_last.max():.3f} top5={np.argsort(arr_last)[-5:][::-1].tolist()}")
+                        response_bytes = struct.pack('<i', token_id)
+                        print(f"[{self.local_ip}] Serving token_id={token_id} to header")
+                    else:
+                        response_bytes = raw_bytes
+
+                    # Android's obtainResultsFromTailer sends ONE "Request Data" then
+                    # blocks on recv(0) forever — no retry.  We must send to latest_identity.
+                    # Sleep 1.5s so that if the relay dropped the connection during the
+                    # 63s ONNX idle, ZMQ DEALER has time to auto-reconnect and
+                    # ROUTER_HANDOVER can refresh its routing-table entry to the new conn.
+                    time.sleep(1.5)
                     router.send_multipart([
-                        identity,
-                        self.device_id.to_bytes(4, "little"),
-                        tensor_bytes,
-                        b"Over"
+                        latest_identity,
+                        sample_id.to_bytes(4, "little"),
+                        response_bytes,
                     ])
+                    print(f"[{self.local_ip}] Delivered response to latest identity")
+
+                    # Clear the event so the next token step's wait() blocks correctly.
+                    event.clear()
 
     def _resolve_ip(self, ip):
-        """Apply ADB/port-forward IP remapping if configured."""
-        return self.ip_map.get(ip, ip)
+        """Apply ADB/port-forward IP remapping. Returns (host, port_override).
+        ip_map values may be 'IP' or 'IP:PORT' — the latter overrides the computed port."""
+        mapped = self.ip_map.get(ip, ip)
+        if ":" in mapped:
+            host, port_str = mapped.rsplit(":", 1)
+            try:
+                return host, int(port_str)
+            except ValueError:
+                pass
+        return mapped, None
 
     def _pull_tensor(self, from_device_id, thread_idx, graph_len, sample_id, timeout=60000):
         """Connect DEALER to previous device's ROUTER and request tensor."""
@@ -493,10 +566,12 @@ class DeviceSimulator:
         dealer = ctx.socket(zmq.DEALER)
 
         port = BASE_PORT + graph_len * thread_idx + (self.device_id - from_device_id)
-        target_ip = self._resolve_ip(self.ip_graph[from_device_id])
+        target_ip, port_override = self._resolve_ip(self.ip_graph[from_device_id])
+        if port_override is not None:
+            port = port_override
         dealer.connect(f"tcp://{target_ip}:{port}")
 
-        dealer.send_multipart([b"Request data", str(sample_id).encode()])
+        dealer.send_multipart([b"Request Data"])
 
         if dealer.poll(timeout):
             frames = dealer.recv_multipart()
@@ -561,7 +636,11 @@ class DeviceSimulator:
         inp  = sess.get_inputs()[0]
 
         if self.tokenizer:
-            tokens = self.tokenizer(prompt, return_tensors="np")
+            formatted = (
+                "<|system|>\nYou are a helpful assistant.</s>\n"
+                f"<|user|>\n{prompt}</s>\n<|assistant|>\n"
+            )
+            tokens = self.tokenizer(formatted, return_tensors="np")
             input_arr = tokens["input_ids"].astype(np.int64)
         else:
             input_arr = np.array(
@@ -607,46 +686,181 @@ class DeviceSimulator:
 
     def _worker_inference_loop(self, graph_len):
         import numpy as np
-        print(f"[{self.local_ip}] Worker ready — waiting for data from device {self.device_id - 1}.")
+        from_device_id = self.device_id - 1
+        print(f"[{self.local_ip}] Worker ready — waiting for data from device {from_device_id}.")
 
-        for sample_id in range(self.num_sample):
-            # Pull activation tensor from previous device
-            input_bytes = self._pull_tensor(
-                self.device_id - 1, 0, graph_len, sample_id)
+        # Create ONE persistent DEALER for the entire inference session.
+        # Android's updateSockets() does the same: one socket per thread, reused
+        # across all token steps.  Creating a new socket per step leaves stale
+        # "Request Data" frames in Android's ROUTER queue; when Android finally
+        # responds it picks up the oldest (dead) peer and the live DEALER never
+        # sees the reply.
+        ctx = zmq.Context.instance()
+        pull_dealer = ctx.socket(zmq.DEALER)
+        port = BASE_PORT + graph_len * 0 + (self.device_id - from_device_id)
+        target_ip, port_override = self._resolve_ip(self.ip_graph[from_device_id])
+        actual_port = port_override if port_override is not None else port
+        pull_dealer.connect(f"tcp://{target_ip}:{actual_port}")
+        print(f"[{self.local_ip}] Pull DEALER connected to device {from_device_id} "
+              f"at {target_ip}:{actual_port}")
 
-            output_bytes = self._run_onnx_worker(input_bytes, sample_id)
+        # For generation tasks Android uses the same sample_id for every token step of
+        # a given prompt.
+        if self.task_type == "generation" and self.max_length > 0:
+            total_steps = self.num_sample * self.max_length
+            steps_per_sample = self.max_length
+        else:
+            total_steps = self.num_sample
+            steps_per_sample = 1
 
-            event = self._data_ready.setdefault(sample_id, threading.Event())
-            self.output_data[sample_id] = output_bytes
-            event.set()
+        try:
+            for step in range(total_steps):
+                sample_id = step // steps_per_sample
 
-            if self.is_tailer:
-                self._print_result(output_bytes)
+                # Send exactly ONE "Request Data" per step on the persistent DEALER.
+                pull_dealer.send_multipart([b"Request Data"])
+                print(f"[{self.local_ip}] Sent 'Request Data' for step {step}, waiting for tensor...")
+
+                # Poll in 30s chunks so we get heartbeat logs if Android is slow
+                waited = 0
+                while not pull_dealer.poll(30_000):
+                    waited += 30
+                    if waited >= 600:
+                        print(f"[{self.local_ip}] FATAL: No tensor after 10 min for step {step}. Aborting.")
+                        break
+                    print(f"[{self.local_ip}] Still waiting for step {step} tensor ({waited}s)...")
+                else:
+                    waited = None  # poll succeeded
+                if waited is not None and waited >= 600:
+                    break
+
+                frames = pull_dealer.recv_multipart()
+                print(f"[{self.local_ip}] Received {len(frames)} frame(s) for step {step}, sizes={[len(f) for f in frames]}")
+                # Android sends [id_4bytes, tensor_bytes]; DEALER strips the ROUTER identity.
+                input_bytes = frames[1] if len(frames) >= 2 else b""
+                if not input_bytes:
+                    print(f"[{self.local_ip}] WARNING: Empty tensor for step {step}. Skipping.")
+                    continue
+
+                output_bytes = self._run_onnx_worker(input_bytes, sample_id)
+
+                event = self._data_ready.setdefault(sample_id, threading.Event())
+                self.output_data[sample_id] = output_bytes
+                event.set()
+
+                if self.is_tailer and self.task_type != "generation":
+                    self._print_result(output_bytes)
+        finally:
+            pull_dealer.close()
+
+    @staticmethod
+    def _deserialize_tensor_vector(data: bytes):
+        """Deserialize the Android SerializeTensorVectorToBytes format.
+
+        Wire format (little-endian, Android AArch64):
+          [numTensors: 8 bytes (size_t)]
+          For each tensor:
+            [tensorType: 4 bytes (ONNXTensorElementDataType enum)]
+            [numDimensions: 8 bytes (size_t)]
+            [dim_0 .. dim_n: 8 bytes each (int64_t)]
+            [raw tensor data]
+        """
+        import struct
+        import numpy as np
+
+        ONNX_DTYPE = {
+            1:  np.float32,   # FLOAT
+            2:  np.uint8,     # UINT8
+            3:  np.int8,      # INT8
+            4:  np.uint16,    # UINT16
+            5:  np.int16,     # INT16
+            6:  np.int32,     # INT32
+            7:  np.int64,     # INT64
+            9:  np.bool_,     # BOOL
+            11: np.float64,   # DOUBLE
+            12: np.uint32,    # UINT32
+            13: np.uint64,    # UINT64
+        }
+
+        offset = 0
+        num_tensors = struct.unpack_from('<Q', data, offset)[0]
+        offset += 8
+
+        tensors = []
+        for _ in range(num_tensors):
+            tensor_type = struct.unpack_from('<I', data, offset)[0]
+            offset += 4
+
+            num_dims = struct.unpack_from('<Q', data, offset)[0]
+            offset += 8
+
+            shape = list(struct.unpack_from(f'<{num_dims}q', data, offset))
+            offset += num_dims * 8
+
+            dtype = ONNX_DTYPE.get(tensor_type, np.float32)
+            num_elements = 1
+            for dim in shape:
+                if dim > 0:
+                    num_elements *= dim
+            arr = np.frombuffer(data, dtype=dtype, count=num_elements, offset=offset)
+            arr = arr.reshape([d if d > 0 else 1 for d in shape])
+            offset += num_elements * arr.itemsize
+            tensors.append(arr)
+
+        return tensors
 
     def _run_onnx_worker(self, input_bytes, sample_id):
         """Run intermediate/tailer ONNX shard on received tensor bytes."""
+        print(f"[{self.local_ip}] Received tensor bytes: {len(input_bytes)}, as float32 count: {len(input_bytes)//4}")
+
         import numpy as np
         if not self.sessions:
             print(f"[{self.local_ip}] No sessions — passing through tensor.")
             return input_bytes
 
         sess = self.sessions[0]
-        inp  = sess.get_inputs()[0]
+        inp_names  = [i.name  for i in sess.get_inputs()]
+        inp_shapes = [i.shape for i in sess.get_inputs()]
+        print(f"[{self.local_ip}] Module1 expects: {list(zip(inp_names, inp_shapes))}")
 
         try:
-            arr = np.frombuffer(input_bytes, dtype=np.float32)
-            # Reshape to match ONNX model's expected input shape
-            expected_shape = [d if d is not None and d > 0 else 1
-                              for d in inp.shape]
-            arr = arr[:int(np.prod(expected_shape))].reshape(expected_shape)
-            outputs = sess.run(None, {inp.name: arr})
+            tensors = self._deserialize_tensor_vector(input_bytes)
+            print(f"[{self.local_ip}] Deserialized {len(tensors)} tensor(s) from blob")
+
+            if len(tensors) != len(inp_names):
+                print(f"[{self.local_ip}] WARNING: deserialized {len(tensors)} tensors "
+                      f"but model needs {len(inp_names)} inputs — padding with zeros")
+
+            ONNX_NP_DTYPE = {
+                "tensor(float)":   np.float32,
+                "tensor(float16)": np.float16,
+                "tensor(double)":  np.float64,
+                "tensor(int32)":   np.int32,
+                "tensor(int64)":   np.int64,
+                "tensor(int8)":    np.int8,
+                "tensor(uint8)":   np.uint8,
+                "tensor(bool)":    np.bool_,
+            }
+
+            feed = {}
+            for i, inp in enumerate(sess.get_inputs()):
+                expected_dtype = ONNX_NP_DTYPE.get(inp.type, np.float32)
+                if i < len(tensors):
+                    feed[inp.name] = tensors[i].astype(expected_dtype)
+                else:
+                    shape = [d if isinstance(d, int) and d > 0 else 1 for d in inp.shape]
+                    feed[inp.name] = np.zeros(shape, dtype=expected_dtype)
+
+            t0 = time.time()
+            outputs = sess.run(None, feed)
             result  = outputs[0].astype(np.float32)
+            print(f"[{self.local_ip}] ONNX inference took {time.time()-t0:.2f}s, output shape: {result.shape}")
         except Exception as e:
             print(f"[{self.local_ip}] ONNX worker error (sample {sample_id}): {e}")
             result = np.frombuffer(input_bytes, dtype=np.float32)
 
         label = "Tailer" if self.is_tailer else "Worker"
-        print(f"[{self.local_ip}] {label} ONNX output shape: {result.shape}")
+        print(f"[{self.local_ip}] {label} shape={result.shape}")
         return result.tobytes()
 
 
@@ -695,6 +909,9 @@ Examples:
                         help=f"Root server ZMQ port (default: {ROOT_PORT})")
     parser.add_argument("--ip-map", nargs="*", metavar="OLD=NEW",
                         help="Remap device IPs for ADB forwarding, e.g. 10.0.2.15=127.0.0.1")
+    parser.add_argument("--model-dir", default=None,
+                        help="Absolute path to pre-extracted model shard directory. "
+                             "Overrides the default ./device_models/<ip>/ location.")
 
     args = parser.parse_args()
 
@@ -710,6 +927,7 @@ Examples:
         model_name=args.model,
         server_port=args.port,
         ip_map=ip_map,
+        model_dir=args.model_dir,
     )
     sim.run()
 

@@ -38,10 +38,16 @@ class Optimizer:
 
         for i, res in self.m2m.items():
             print(f'res[]: {res}')
-            for j, val in res['seq'].items():
-                self.m2m_size[int(i)][int(j)] = sum(val) / 1_000_000
-            for j, val in res['res'].items():
-                self.m2m_size[int(i)][int(j)] = sum(val) / 1_000_000
+            if isinstance(res, dict):
+                for j, val in res['seq'].items():
+                    self.m2m_size[int(i)][int(j)] = sum(val) / 1_000_000
+                for j, val in res['res'].items():
+                    self.m2m_size[int(i)][int(j)] = sum(val) / 1_000_000
+            else:
+                # Sequential (non-residual) mode: module i sends all output to module i+1
+                next_i = int(i) + 1
+                if next_i < self.m2m_size.shape[1]:
+                    self.m2m_size[int(i)][next_i] = sum(res) / 1_000_000
 
         self.model_size = model_size
         for k, v in self.model_size.items():

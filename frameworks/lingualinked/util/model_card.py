@@ -491,7 +491,7 @@ class ModelCard:
                     module = onnx_module_loading(f"{self.onnx_module_to_split_path}/module{rank}/", rank,
                                                  self.quantization_option)
                     input_onnx_types = [node.type.tensor_type.elem_type for node in module.graph.input]
-                    input_tensors = input_for_inference
+                    input_tensors = input_for_inference if isinstance(input_for_inference, list) else [input_for_inference]
                     test_tensor_bytearray = serialize_tensors(input_tensors, input_onnx_types)
                     onnx.save(module, f"{self.onnx_module_to_split_path}/flop_test_module.onnx")
                     bytearray_saving_path = os.path.join(self.onnx_module_to_split_path, "flop_byte_array.bin")
@@ -784,12 +784,49 @@ def retrieve_sending_info(root_dir, model_name, ip_module_list, quantization_opt
         quantized_option_path = f'{model_name}_quantized_int8_seq' if quantization_option else f'{model_name}_unquantized_seq'
 
     directory_path = os.path.join(root_dir, 'onnx_model', 'backup', quantized_option_path)
+    _ensure_seq_dep_maps(directory_path)
     dependency_map = {"send_seq": f"{directory_path}/sender_seq_dep_map.json",
                       "send_res": f"{directory_path}/sender_res_dep_map.json",
                       "rece_seq": f"{directory_path}/receiver_seq_dep_map.json",
                       "rece_res": f"{directory_path}/receiver_res_dep_map.json"}
 
     return ip_graph, dependency_map
+
+
+def _ensure_seq_dep_maps(directory_path):
+    """Auto-generate sequential dep maps from model_input/output_names.json if missing."""
+    sender_seq = os.path.join(directory_path, 'sender_seq_dep_map.json')
+    sender_res = os.path.join(directory_path, 'sender_res_dep_map.json')
+    receiver_seq = os.path.join(directory_path, 'receiver_seq_dep_map.json')
+    receiver_res = os.path.join(directory_path, 'receiver_res_dep_map.json')
+
+    if all(os.path.isfile(p) for p in [sender_seq, sender_res, receiver_seq, receiver_res]):
+        return  # already present
+
+    output_names_path = os.path.join(directory_path, 'model_output_names.json')
+    if not os.path.isfile(output_names_path):
+        raise FileNotFoundError(f"Cannot auto-generate dep maps: {output_names_path} missing")
+
+    with open(output_names_path) as f:
+        output_names = json.load(f)  # {"module_0": [...], "module_1": [...]}
+
+    # Build sender/receiver maps: each module i sends all its outputs to module i+1
+    modules = sorted(output_names.keys(), key=lambda k: int(k.split('_')[1]))
+    sender_seq_data = {}
+    receiver_seq_data = {}
+    for idx in range(len(modules) - 1):
+        src = str(idx)
+        dst = str(idx + 1)
+        num_outputs = len(output_names[modules[idx]])
+        tensor_indices = list(range(num_outputs))
+        sender_seq_data[src] = {dst: tensor_indices}
+        receiver_seq_data[dst] = {src: tensor_indices}
+
+    for path, data in [(sender_seq, sender_seq_data), (sender_res, {}),
+                       (receiver_seq, receiver_seq_data), (receiver_res, {})]:
+        with open(path, 'w') as f:
+            json.dump(data, f)
+    print(f"[retrieve_sending_info] Auto-generated dep maps in {directory_path}")
 
 
 def retrieve_sending_dir(root_dir, model_name, quantization_option, residual_connection):

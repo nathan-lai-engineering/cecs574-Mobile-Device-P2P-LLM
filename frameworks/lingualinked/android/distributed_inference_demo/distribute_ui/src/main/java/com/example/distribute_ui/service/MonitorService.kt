@@ -73,6 +73,7 @@ class MonitorService : Service(), MonitorActions{
     private var flopNum: Long = 0
 
     private var monitorBreak: Boolean = false
+    private val monitorStarted = java.util.concurrent.atomic.AtomicBoolean(false)
 
     inner class LocalBinder : Binder() {
         fun getService(): MonitorService = this@MonitorService
@@ -138,9 +139,13 @@ class MonitorService : Service(), MonitorActions{
         if (id == 1) {
             role = "header"
         }
-        GlobalScope.launch(Dispatchers.IO) {
-            Log.d(mTAG, "create startMonitor thread")
-            startMonitorThread()
+        if (monitorStarted.compareAndSet(false, true)) {
+            GlobalScope.launch(Dispatchers.IO) {
+                Log.d(mTAG, "create startMonitor thread")
+                startMonitorThread()
+            }
+        } else {
+            Log.d(mTAG, "startMonitorThread already running, ignoring duplicate startService call")
         }
 
         return START_STICKY

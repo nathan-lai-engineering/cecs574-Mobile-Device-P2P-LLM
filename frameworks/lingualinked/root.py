@@ -15,13 +15,13 @@ from system_pipeline.onnx_backend.optimization import Optimizer
 
 monitor_receive_interval = 5  # set intervals for receiving monitor info from clients
 monitor_port = "34567"  # set server port to receive monitor info
-TIMEOUT = 60  # Time to wait for new devices to connect to servers
+TIMEOUT = 1  # Time to wait for new devices to connect to servers
 MODEL_EXIST_ON_DEVICE = True  # set True if the model exists on the mobile device, will skip model creation and transmission
 runtime_option = False  # set True if the load balance is runtime
 Quntization_Option = False
 task = "Generation"
 root_dir = os.path.dirname(os.path.abspath(__file__))
-residual_connection_option = True
+residual_connection_option = False
 
 if __name__ == "__main__":
     start = time.time()
@@ -116,13 +116,16 @@ if __name__ == "__main__":
         )
 
         cached_ok = False
-        if os.path.isdir(to_send_path) and dep_maps_exist:
+        ip_module_path = os.path.join(to_send_path, 'ip_module.json')
+        session_path   = os.path.join(to_send_path, 'session.json')
+        if os.path.isdir(to_send_path) and dep_maps_exist \
+                and os.path.isfile(ip_module_path) and os.path.isfile(session_path):
             print('to_send dir exists')
             # Load the JSON string from the file
-            with open(os.path.join(to_send_path, 'ip_module.json'), 'r') as file:
+            with open(ip_module_path, 'r') as file:
                 ip_module_json = file.read()
 
-            with open(os.path.join(to_send_path, 'session.json'), 'r') as file:
+            with open(session_path, 'r') as file:
                 session_index_json = file.read()
 
             ip_module = json.loads(ip_module_json)
@@ -143,6 +146,16 @@ if __name__ == "__main__":
                 send.send_multipart([ip, b"False"])
 
         else:
+            # Start the monitor ZMQ ROUTER BEFORE notifying devices so that when
+            # Android's MonitorService connects (triggered by "True" below) the
+            # socket is already listening.  Model-file paths are filled in via
+            # set_model_info() after preparation completes.
+            monitor = monitor.Monitor(monitor_receive_interval, monitor_port, devices, requested_model,
+                                      None, None, 0, runtime_option)
+            thread = threading.Thread(target=monitor.start)
+            thread.start()
+            time.sleep(0.5)  # give the ROUTER socket time to bind
+
             # sending monitor initiation signal to all the devices
             for ip in ip_graph_requested:
                 send.send_multipart([ip, b"True"])
@@ -164,14 +177,8 @@ if __name__ == "__main__":
             print(f'num_flop: {num_flop}')
             # print(f'out_size_map: {out_size_map}')
 
-            for ip in ip_graph_requested:
-                send.send_multipart([ip, b"ready for monitor"])
-
-            # start monitor
-            monitor = monitor.Monitor(monitor_receive_interval, monitor_port, devices, requested_model, \
-                                      bytearray_path, flop_module_path, num_flop, runtime_option)
-            thread = threading.Thread(target=monitor.start)
-            thread.start()
+            # Unblock sendIPGraph now that model files are ready
+            monitor.set_model_info(bytearray_path, flop_module_path, num_flop)
 
             num_devices = len(devices)
             monitor_responded = monitor.is_monitor_ready.wait(timeout=60)
