@@ -321,7 +321,13 @@ class ModelCard:
 
         if not os.path.isdir(onnx_module_path):
             os.makedirs(onnx_module_path)
-        if not os.listdir(onnx_module_path):
+        # Check for actual ONNX files — a dir with only module_name_*.json is treated as empty
+        _onnx_present = any(
+            any(f.endswith('.onnx') for f in os.listdir(os.path.join(onnx_module_path, d)))
+            for d in os.listdir(onnx_module_path)
+            if os.path.isdir(os.path.join(onnx_module_path, d)) and d.startswith('module')
+        ) if os.listdir(onnx_module_path) else False
+        if not _onnx_present:
             if self.residual_connection and self.split_size >= 2:
                 if sequential_dependency_map is not None:
                     torch_to_onnx_residual(module_list=modules,
@@ -411,7 +417,12 @@ class ModelCard:
 
         if not os.path.isdir(onnx_module_path):
             os.makedirs(onnx_module_path)
-        if not os.listdir(onnx_module_path):
+        _onnx_present = any(
+            any(f.endswith('.onnx') for f in os.listdir(os.path.join(onnx_module_path, d)))
+            for d in os.listdir(onnx_module_path)
+            if os.path.isdir(os.path.join(onnx_module_path, d)) and d.startswith('module')
+        ) if os.listdir(onnx_module_path) else False
+        if not _onnx_present:
             if self.residual_connection and self.split_size >= 2:
                 if sequential_dependency_map or residual_dependency_map:
                     torch_to_onnx_residual(module_list=modules,

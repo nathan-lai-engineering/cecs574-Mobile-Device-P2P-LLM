@@ -206,6 +206,8 @@ class MonitorService : Service(), MonitorActions{
             uploadMonitorInfo(monitorSocket)
         }
 
+        // Reset so the monitor can reconnect in the next session
+        monitorStarted.set(false)
     }
 
     private fun uploadMonitorInfo(socket: ZMQ.Socket) {
