@@ -4,11 +4,28 @@ Nathan Lai
 Kevin Kongwattanachai
 
 ---
-# llama instructions
+# Setup VM
 
-## compiling (tested with g++)
-cmake -B build
-cmake --build build -j --target llama-server llama-cli
+## Setup debian
 
-## execution
-./llama-cli -m <path/to/your/model.gguf> -p "Your prompt here"
+Download and Install Virtualbox
+
+Download debian 12 iso
+
+Create new virtualbox VM from debian ISO (disk size at least 50gb)
+
+Once debian finished installing from ISO, shut down VM
+
+## Create virtual switch
+
+Go to main network tab, create new NAT network
+
+## Edit VM settings
+
+Right Click on the vm and select settings
+
+System: 1 cpu core, 6gb ram
+
+Network: select the Nat network you created, randomize mac address
+
+
