@@ -4,6 +4,26 @@ Nathan Lai
 Kevin Kongwattanachai
 
 ---
+
+## Project Structure
+Project is organized into following folders
+
+```text
+.
+├── frameworks/            # forks of the original repos
+│   ├── exo/                    
+│   │   └── README.md
+│   ├── lingualinked/            # root folder has coordinator and thin worker nodes
+│   │   ├── README.md
+│   │   ├── root.py                     # coordinator node
+│   │   ├── device_client.py            # thin worker python script
+│   │   └── android/
+│   │       └── distributed_inference_demo/       # android app of the worker/header node
+│   └── llama/
+│       └── README.md
+└── README.md
+```
+
 # Setup VM
 
 ## Setup debian
@@ -27,5 +47,12 @@ Right Click on the vm and select settings
 System: 1 cpu core, 6gb ram
 
 Network: select the Nat network you created, randomize mac address
+
+## Setting up specific frameworks
+
+Follow instructions on specific framework readme
+
+Clone vm instance after framework is fully installed with randomized Nat network to create identical instances.
+
 
 
