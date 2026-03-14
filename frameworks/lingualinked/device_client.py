@@ -780,10 +780,15 @@ class DeviceSimulator:
                     if waited >= 600:
                         print(f"[{self.local_ip}] FATAL: No tensor after 10 min for step {step}. Aborting.")
                         break
+                    # If this is not the very first step and Android has gone quiet,
+                    # assume EOS was reached and generation ended early.
+                    if step > 0 and waited >= 30:
+                        print(f"[{self.local_ip}] No tensor for 30s at step {step} (EOS assumed) — ending sample early.")
+                        break
                     print(f"[{self.local_ip}] Still waiting for step {step} tensor ({waited}s)...")
                 else:
                     waited = None  # poll succeeded
-                if waited is not None and waited >= 600:
+                if waited is not None and waited >= 30:
                     break
 
                 frames = pull_sock.recv_multipart()
