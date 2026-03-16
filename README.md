@@ -18,6 +18,14 @@ The focus of our research is to compare the repo's and determine viability of ea
 ## Experiment Results
 By running each framework on consistent specs and VM images, we were able to determine EXO had better inference speed scaling though Lingualinked had better overall TTFT through the use of its coordinator server.
 
+## Architecture Differences
+### LinguaLinked
+Hybrid P2P with a mobile-first focus. Utilizes a coordinator server to divide inference work between worker devices. Inference model is still run in serial using Pipeline Parallelism, just divided among devices, therefore benefits through larger prompts with multiple tokens. Maximum device count for a given inference model is dependent on modularity of the used model, as it calculates max worker count by the amount of logically indepdent subgraphs of the model.
+### EXO
+True P2P focused around physically connected Apple devices. Utilizes true parallelism with tensor paralleism powered largely by extremely low overhead with high transfer speed thunderbolt data cables. Models are partitioned by hidden layer counts which determines the max worker count.
+### Llama.cpp
+Standalone, there is no P2P here. Used as a baseline to determine whether P2P Frameworks can outperform single device inference.
+
 # Project Structure
 Project is organized into following folders
 
