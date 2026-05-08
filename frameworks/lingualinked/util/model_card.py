@@ -150,8 +150,10 @@ def _patch_llama_rotary_for_fx_tracing():
 
 _patch_llama_rotary_for_fx_tracing()
 
+_LLAMA2_7B_PATH = os.environ.get("LLAMA2_7B_PATH", "/app/llama-2-7b")
+
 available_models = {
-    "llama-2-7b": ["/app/llama-2-7b", "sentencepiece_tokenizer"],
+    "llama-2-7b": [_LLAMA2_7B_PATH, "sentencepiece_tokenizer"],
     "tinyllama": ["TinyLlama/TinyLlama-1.1B-Chat-v1.0", "sentencepiece_tokenizer"],
     "bloom560m": ["bigscience/bloom-560m", "huggingface_tokenizer"],
     "bloom1b1": ["bigscience/bloom-1b1", "huggingface_tokenizer"],
@@ -424,7 +426,7 @@ class ModelCard:
         ) if os.listdir(onnx_module_path) else False
         if not _onnx_present:
             if self.residual_connection and self.split_size >= 2:
-                if sequential_dependency_map or residual_dependency_map:
+                if sequential_dependency_map is not None and residual_dependency_map is not None:
                     torch_to_onnx_residual(module_list=modules,
                                            input=input_for_export,
                                            export_path=onnx_module_path,

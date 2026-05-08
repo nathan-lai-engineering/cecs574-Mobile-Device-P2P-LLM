@@ -124,7 +124,7 @@ def sess_encrypt(key, plainText):
 
 def sess_decrypt(key, cipherText):
     fernet_key = Fernet(key)
-    return fernet_key.encrypt(cipherText)
+    return fernet_key.decrypt(cipherText)
 
 
 def encrypt_file(input_file, output_file, key):

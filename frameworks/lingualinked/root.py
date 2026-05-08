@@ -3,7 +3,7 @@ import zmq
 import numpy as np
 from SecureConnection import root_server
 from SecureConnection import server
-from SecureConnection import monitor
+from SecureConnection import monitor as _monitor_module
 import threading
 import torch
 import heapq
@@ -59,10 +59,17 @@ if __name__ == "__main__":
             elif action.decode() == "RegisterIP":
                 print("waiting for all device to be connected...")
                 ip_graph_requested.append(identifier)
-                jsonObject = json.loads(msg_content.decode())
+                try:
+                    jsonObject = json.loads(msg_content.decode())
+                except (UnicodeDecodeError, json.JSONDecodeError) as e:
+                    print(f"WARNING: malformed RegisterIP message from {identifier.hex()}, ignoring: {e}")
+                    continue
                 ip = jsonObject.get("ip")
                 role = jsonObject.get("role")
                 model_request = jsonObject.get("model", None)
+                if not ip or not role:
+                    print(f"WARNING: RegisterIP missing 'ip' or 'role' field, ignoring: {jsonObject}")
+                    continue
                 if role == "header":
                     devices.appendleft({"ip": ip, "role": role})
                     if model_request:
@@ -150,9 +157,9 @@ if __name__ == "__main__":
             # Android's MonitorService connects (triggered by "True" below) the
             # socket is already listening.  Model-file paths are filled in via
             # set_model_info() after preparation completes.
-            monitor = monitor.Monitor(monitor_receive_interval, monitor_port, devices, requested_model,
+            monitor = _monitor_module.Monitor(monitor_receive_interval, monitor_port, devices, requested_model,
                                       None, None, 0, runtime_option)
-            thread = threading.Thread(target=monitor.start)
+            thread = threading.Thread(target=monitor.start, daemon=True)
             thread.start()
             time.sleep(0.5)  # give the ROUTER socket time to bind
 
@@ -327,9 +334,8 @@ if __name__ == "__main__":
     status = {}
     threads = []
 
-    lock = threading.Lock()
     locks = [threading.Lock(), threading.Lock()]
-    conditions = [threading.Condition() for i in range(len(devices) + 1)]
+    conditions = [threading.Condition() for _ in range(max(len(devices) + 1, 3))]
 
     for i in range(config["num_device"]):
         t = threading.Thread(target=root_server.communication_open_close, args=(send, config, status, conditions, locks))

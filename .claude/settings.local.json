@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cp \"c:/CSULB/cecs574-Mobile-Device-P2P-LLM/frameworks/lingualinked/onnx_model/backup/tinyllama_unquantized_res/sender_seq_dep_map.json\" \"c:/CSULB/cecs574-Mobile-Device-P2P-LLM/frameworks/lingualinked/onnx_model/backup/tinyllama_unquantized_seq/sender_seq_dep_map.json\")",
+      "Bash(cp \"c:/CSULB/cecs574-Mobile-Device-P2P-LLM/frameworks/lingualinked/onnx_model/backup/tinyllama_unquantized_res/sender_res_dep_map.json\" \"c:/CSULB/cecs574-Mobile-Device-P2P-LLM/frameworks/lingualinked/onnx_model/backup/tinyllama_unquantized_seq/sender_res_dep_map.json\")",
+      "Bash(cp \"c:/CSULB/cecs574-Mobile-Device-P2P-LLM/frameworks/lingualinked/onnx_model/backup/tinyllama_unquantized_res/receiver_seq_dep_map.json\" \"c:/CSULB/cecs574-Mobile-Device-P2P-LLM/frameworks/lingualinked/onnx_model/backup/tinyllama_unquantized_seq/receiver_seq_dep_map.json\")",
+      "Bash(cp \"c:/CSULB/cecs574-Mobile-Device-P2P-LLM/frameworks/lingualinked/onnx_model/backup/tinyllama_unquantized_res/receiver_res_dep_map.json\" \"c:/CSULB/cecs574-Mobile-Device-P2P-LLM/frameworks/lingualinked/onnx_model/backup/tinyllama_unquantized_seq/receiver_res_dep_map.json\")",
+      "Bash(Get-ChildItem -Path \"c:\\\\CSULB\\\\cecs574-Mobile-Device-P2P-LLM\" -Recurse -Exclude \"exo\")",
+      "Bash(Select-Object FullName)",
+      "Bash(Sort-Object FullName)"
+    ]
+  }
+}

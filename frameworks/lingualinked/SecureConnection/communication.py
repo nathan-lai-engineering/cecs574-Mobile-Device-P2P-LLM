@@ -1,7 +1,5 @@
 import zmq
 import argparse
-import server
-import client
 import time
 import yaml
 import pickle
@@ -9,9 +7,21 @@ import torch
 import threading
 import torch.nn.functional as F
 import os
-from test_inference_resnet import inference
-from test_inference_resnet_onnx import inference_onnx
 from transformers import AutoTokenizer
+
+try:
+    from . import server
+    from . import client
+except ImportError:
+    import server
+    import client
+
+try:
+    from test_inference_resnet import inference
+    from test_inference_resnet_onnx import inference_onnx
+except ImportError:
+    inference = None
+    inference_onnx = None
 
 def inference_procedure(cfg, received_data, param):
     while True:

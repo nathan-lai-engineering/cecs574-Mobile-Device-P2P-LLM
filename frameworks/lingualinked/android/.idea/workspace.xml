@@ -1,5 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
+  <component name="AutoImportSettings">
+    <option name="autoReloadType" value="NONE" />
+  </component>
   <component name="ChangeListManager">
     <list default="true" id="d27f51d4-0c37-4244-9ee1-75dbae6aa5c4" name="Changes" comment="" />
     <option name="SHOW_DIALOG" value="false" />
@@ -7,8 +10,11 @@
     <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
     <option name="LAST_RESOLUTION" value="IGNORE" />
   </component>
+  <component name="ClangdSettings">
+    <option name="formatViaClangd" value="false" />
+  </component>
   <component name="Git.Settings">
-    <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$/.." />
+    <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$/../../.." />
   </component>
   <component name="MarkdownSettingsMigration">
     <option name="stateVersion" value="1" />
@@ -16,6 +22,9 @@
   <component name="ProjectCodeStyleSettingsMigration">
     <option name="version" value="2" />
   </component>
+  <component name="ProjectColorInfo"><![CDATA[{
+  "associatedIndex": 0
+}]]></component>
   <component name="ProjectId" id="2S7zh2aQlu1wjsTHNCM3vdfcldt" />
   <component name="ProjectViewState">
     <option name="hideEmptyMiddlePackages" value="true" />
@@ -24,11 +33,18 @@
   <component name="PropertiesComponent"><![CDATA[{
   "keyToString": {
     "RunOnceActivity.ShowReadmeOnStart": "true",
+    "RunOnceActivity.cidr.known.project.marker": "true",
+    "RunOnceActivity.git.unshallow": "true",
     "RunOnceActivity.go.formatter.settings.were.checked": "true",
     "RunOnceActivity.go.migrated.go.modules.settings": "true",
+    "RunOnceActivity.readMode.enableVisualFormatting": "true",
     "WebServerToolWindowFactoryState": "false",
+    "cf.first.check.clang-format": "false",
+    "cidr.known.project.marker": "true",
+    "git-widget-placeholder": "main",
     "go.import.settings.migrated": "true",
-    "last_opened_file_path": "/Users/yurunsong/Desktop/Projects/Dist-CPU-Learn/android",
+    "kotlin-language-version-configured": "true",
+    "last_opened_file_path": "C:/CSULB/cecs574-Mobile-Device-P2P-LLM/frameworks/lingualinked/android",
     "vue.rearranger.settings.migration": "true"
   }
 }]]></component>

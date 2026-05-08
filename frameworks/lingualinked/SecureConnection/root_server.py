@@ -78,11 +78,13 @@ def communication_open_close(sender, config, status, conditions, lock, open=True
                     conditions[1].wait()
                 conditions[1].notify_all()
 
-            ## Start
+            ## Start — acquire send lock OUTSIDE the condition block to avoid
+            ## holding the condition's internal lock while writing to the socket.
+            with lock[1]:
                 sender.send_multipart([client_id, b"Start"])
-                status[client_id] = b'Start'
+            status[client_id] = b'Start'
 
-                print(f"Status: Start {config['ids'][client_id]}")
+            print(f"Status: Start {config['ids'][client_id]}")
 
         elif msg == b"Running":
             # Todo simulate load balance
@@ -113,6 +115,7 @@ def communication_open_close(sender, config, status, conditions, lock, open=True
                     conditions[2].wait()
                 conditions[2].notify_all()
 
+            with lock[1]:
                 sender.send_multipart([client_id, b"Close"])
             print(f"Close {config['ids'][client_id]}")
             break

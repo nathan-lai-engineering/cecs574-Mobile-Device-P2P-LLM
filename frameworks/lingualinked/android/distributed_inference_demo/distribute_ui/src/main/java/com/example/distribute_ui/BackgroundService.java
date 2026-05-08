@@ -206,7 +206,6 @@ public class BackgroundService extends Service {
                             }else {
                                 System.out.println("New user input");
                                 System.out.println("***************" + messageContent);
-                                messageContent = String.format("User: %s. Response:", messageContent); // format chat prompt
                                 userinput = messageContent;
                                 test_input.add(userinput);
                                 j++;

@@ -8,7 +8,7 @@ services:
     entrypoint: /bin/bash
     volumes:
       - .:/app                                              # live-edit source without rebuilding
-      - C:\CSULB\llama-2-7b:/app/llama-2-7b                # LLaMA-2 weights
+      - ${MODEL_PATH:-/opt/models/llama-2-7b}:/app/llama-2-7b  # set MODEL_PATH env var to your weights dir
     deploy:
       resources:
         reservations:

@@ -32,6 +32,13 @@ from pathlib import Path
 import zmq
 
 try:
+    import psutil as _psutil
+    PSUTIL_AVAILABLE = True
+except ImportError:
+    _psutil = None
+    PSUTIL_AVAILABLE = False
+
+try:
     import numpy as np
     import onnxruntime as ort
     ONNX_AVAILABLE = True
@@ -224,10 +231,13 @@ class DeviceSimulator:
                 if i != my_idx:
                     bandwidth[i] = 50.0   # MB/s
 
-            import psutil
-            vm = psutil.virtual_memory()
-            total_mem = vm.total / (1024 * 1024)    # MB
-            avail_mem = vm.available / (1024 * 1024)
+            if _psutil is not None:
+                vm = _psutil.virtual_memory()
+                total_mem = vm.total / (1024 * 1024)    # MB
+                avail_mem = vm.available / (1024 * 1024)
+            else:
+                total_mem = 4096.0
+                avail_mem = 2048.0
 
             flop_speed = 1000.0   # MFLOPS placeholder
 
@@ -629,7 +639,7 @@ class DeviceSimulator:
             port = port_override
         dealer.connect(f"tcp://{target_ip}:{port}")
 
-        dealer.send_multipart([b"Request Data"])
+        dealer.send_multipart([b"Request Data", str(sample_id).encode()])
 
         if dealer.poll(timeout):
             frames = dealer.recv_multipart()
@@ -726,10 +736,14 @@ class DeviceSimulator:
 
     def _print_result(self, tensor_bytes):
         """Decode final output tensor and print the result."""
-        import numpy as np
+        import numpy as np, struct
         try:
-            arr = np.frombuffer(tensor_bytes, dtype=np.float32)
-            token_id = int(np.argmax(arr[-4096:] if len(arr) >= 4096 else arr))
+            if len(tensor_bytes) == 4:
+                # Tailer on a separate VM already ran argmax and returns a raw int32 token_id
+                token_id = struct.unpack('<i', tensor_bytes)[0]
+            else:
+                arr = np.frombuffer(tensor_bytes, dtype=np.float32)
+                token_id = int(np.argmax(arr[-4096:] if len(arr) >= 4096 else arr))
             if self.tokenizer:
                 text = self.tokenizer.decode([token_id], skip_special_tokens=True)
                 print(f"\n[{self.local_ip}] Response token: '{text}'\n")

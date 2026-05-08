@@ -5,7 +5,7 @@ import os
 import zipfile
 
 
-from encryption import generate_keys, serialize_public_key, deserialize_public_key, decrypt_session_key, \
+from .encryption import generate_keys, serialize_public_key, deserialize_public_key, decrypt_session_key, \
     serialize_private_key, deserialize_private_key, decrypt_large_zip, sess_encrypt, public_encrypt, decrypt_file
 
 client_key = {"public_key":None, "private_key":None}
@@ -189,10 +189,19 @@ def receive_model_file(path, sock, chunked=True, chunk_size=1024*1024):
         print("Data is writen")
 
 
-from test_inference_resnet import initialize_model
-from test_inference_resnet_onnx import initialize_onnx_model
+try:
+    from test_inference_resnet import initialize_model
+    from test_inference_resnet_onnx import initialize_onnx_model
+    _LEGACY_INFERENCE_AVAILABLE = True
+except ImportError:
+    _LEGACY_INFERENCE_AVAILABLE = False
 
 def model_initialize(param):
+    if not _LEGACY_INFERENCE_AVAILABLE:
+        raise RuntimeError(
+            "Legacy inference modules (test_inference_resnet, test_inference_resnet_onnx) "
+            "are not present. Use device_client.py for inference instead."
+        )
     if param["onnx"]:
         param["model"], param["model_input_name"] = initialize_onnx_model(os.path.dirname(param["model_path"]))
     else:

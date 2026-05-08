@@ -15,15 +15,15 @@ from .root_server import send_model_file
 TIMEOUT = 45
 
 class Monitor:
-    monitor_info_map = {}
-    latency_list = []
-    bandwidth_list = []
-    memory_list = []
-    flop_list = []
-    receive_num = 0
 
     def __init__(self, monitor_receive_interval, monitor_port, devices, model_name, byte_array_path,\
                  flop_module_path, num_flop, runtime_option):
+        self.monitor_info_map = {}
+        self.latency_list = []
+        self.bandwidth_list = []
+        self.memory_list = []
+        self.flop_list = []
+        self.receive_num = 0
         self.monitor_receive_interval = monitor_receive_interval
         self.portNum = monitor_port
         self.root_device_len = len(devices)
