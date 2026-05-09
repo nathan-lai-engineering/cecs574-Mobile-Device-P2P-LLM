@@ -511,17 +511,12 @@ class DeviceSimulator:
 
         print(f"[{self.local_ip}] Serving on port {port} for device {requester_id}")
 
-        _hb = 0
         while self._running:
-            _hb += 1
-            if _hb % 10 == 0:
-                print(f"[{self.local_ip}] _bind_router port={port} still waiting ({_hb}s)...")
             if router.poll(1000):
                 frames = router.recv_multipart()
                 identity = frames[0]
                 request  = frames[1] if len(frames) > 1 else b""
                 sample_id = int(frames[2].decode()) if len(frames) > 2 else 0
-                print(f"[{self.local_ip}] _bind_router port={port} got frames={len(frames)} req={request}")
 
                 # Android sends "Request Data" (uppercase D); match it case-insensitively
                 if request.lower() == b"request data":
@@ -591,11 +586,8 @@ class DeviceSimulator:
                         else:
                             # Fallback: last vocab_size elements
                             arr_last = arr[-vocab_size:] if total_elems >= vocab_size else arr
-                        t_logit = time.time()
                         token_id = int(np.argmax(arr_last))
-                        print(f"[{self.local_ip}] logit pos={seq_len-1} stats: min={arr_last.min():.3f} max={arr_last.max():.3f} top5={np.argsort(arr_last)[-5:][::-1].tolist()}")
                         response_bytes = struct.pack('<i', token_id)
-                        print(f"[{self.local_ip}] Serving token_id={token_id} to header (logit→argmax: {time.time()-t_logit:.4f}s)")
                     else:
                         response_bytes = raw_bytes
 
@@ -605,13 +597,11 @@ class DeviceSimulator:
                     # ONNX, ZMQ DEALER has time to auto-reconnect and ROUTER_HANDOVER
                     # can refresh its routing-table entry to the new connection.
                     time.sleep(1.5)
-                    t_send = time.time()
                     router.send_multipart([
                         latest_identity,
                         sample_id.to_bytes(4, "little"),
                         response_bytes,
                     ])
-                    print(f"[{self.local_ip}] Token delivered (send took {time.time()-t_send:.4f}s)")
 
                     # Clear the event so the next token step's wait() blocks correctly.
                     event.clear()
@@ -793,8 +783,6 @@ class DeviceSimulator:
         try:
             for step in range(total_steps):
                 sample_id = step // steps_per_sample
-                print(f"[{self.local_ip}] Waiting for tensor push for step {step}...")
-
                 # Poll in 30s chunks so we get heartbeat logs if Android is slow
                 waited = 0
                 while not pull_sock.poll(30_000):
@@ -815,7 +803,6 @@ class DeviceSimulator:
 
                 frames = pull_sock.recv_multipart()
                 t_tensor_recv = time.time()
-                print(f"[{self.local_ip}] Received {len(frames)} frame(s) for step {step}, sizes={[len(f) for f in frames]}")
                 # Android sends [id_4bytes, seqLen_4bytes, tensor_bytes]
                 if len(frames) >= 3:
                     import struct as _struct
@@ -825,14 +812,12 @@ class DeviceSimulator:
                     seq_len = 0
                     input_bytes = frames[1] if len(frames) >= 2 else b""
                 self._seq_len[sample_id] = seq_len
-                print(f"[{self.local_ip}] seq_len={seq_len} for sample {sample_id} step {step}")
                 if not input_bytes:
                     print(f"[{self.local_ip}] WARNING: Empty tensor for step {step}. Skipping.")
                     continue
 
                 output_bytes = self._run_onnx_worker(input_bytes, sample_id)
                 t_onnx_done = time.time()
-                print(f"[{self.local_ip}] Step {step} VM inference: {t_onnx_done - t_tensor_recv:.3f}s (deserialize+ONNX)")
 
                 # ── per-token stats ───────────────────────────────────────────
                 if gen_start_time is None:
@@ -868,7 +853,7 @@ class DeviceSimulator:
 
                 throughput = token_count / elapsed if elapsed > 0 else 0.0
                 print(
-                    f"[{self.local_ip}] Token {step:>3d} | "
+                    f"[{time.strftime('%H:%M:%S')}][{self.local_ip}] Token {step:>3d} | "
                     f"TTFT: {ttft:.2f}s | "
                     f"Throughput: {throughput:.3f} tok/s | "
                     f"Mem: {peak_mem_mb:.0f}MB | "
@@ -943,21 +928,16 @@ class DeviceSimulator:
 
     def _run_onnx_worker(self, input_bytes, sample_id):
         """Run intermediate/tailer ONNX shard on received tensor bytes."""
-        print(f"[{self.local_ip}] Received tensor bytes: {len(input_bytes)}, as float32 count: {len(input_bytes)//4}")
-
         import numpy as np
         if not self.sessions:
             print(f"[{self.local_ip}] No sessions — passing through tensor.")
             return input_bytes
 
         sess = self.sessions[0]
-        inp_names  = [i.name  for i in sess.get_inputs()]
-        inp_shapes = [i.shape for i in sess.get_inputs()]
-        print(f"[{self.local_ip}] Module1 expects: {list(zip(inp_names, inp_shapes))}")
+        inp_names = [i.name for i in sess.get_inputs()]
 
         try:
             tensors = self._deserialize_tensor_vector(input_bytes)
-            print(f"[{self.local_ip}] Deserialized {len(tensors)} tensor(s) from blob")
 
             if len(tensors) != len(inp_names):
                 print(f"[{self.local_ip}] WARNING: deserialized {len(tensors)} tensors "
@@ -983,16 +963,12 @@ class DeviceSimulator:
                     shape = [d if isinstance(d, int) and d > 0 else 1 for d in inp.shape]
                     feed[inp.name] = np.zeros(shape, dtype=expected_dtype)
 
-            t0 = time.time()
             outputs = sess.run(None, feed)
             result  = outputs[0].astype(np.float32)
-            print(f"[{self.local_ip}] ONNX inference took {time.time()-t0:.2f}s, output shape: {result.shape}")
         except Exception as e:
             print(f"[{self.local_ip}] ONNX worker error (sample {sample_id}): {e}")
             result = np.frombuffer(input_bytes, dtype=np.float32)
 
-        label = "Tailer" if self.is_tailer else "Worker"
-        print(f"[{self.local_ip}] {label} shape={result.shape}")
         return result.tobytes()
 
 
