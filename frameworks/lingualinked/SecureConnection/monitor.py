@@ -154,16 +154,17 @@ class Monitor:
                     device_set.add(ip)
                     role = jsonObject.get("role")
                     print(f"device set: {device_set}")
-                # last_received_time = time.time()
+                    last_received_time = time.time()
             else:
                 print(f"monitor: waiting for devices... ({len(device_set)}/{self.root_device_len} connected)")
 
-
-            # if time.time() - last_received_time > TIMEOUT:
             if len(device_set) == self.root_device_len:
-                # print("monitor No new devices connected in the last", TIMEOUT, "seconds. Broadcasting message.")
                 print("all devices are added to monitor system, check devices in monitor")
                 print(self.devices)
+                self.sendIPGraph()
+                continue_listening = False
+            elif device_set and time.time() - last_received_time > TIMEOUT:
+                print(f"monitor: timeout — only {len(device_set)}/{self.root_device_len} devices connected. Proceeding with available devices.")
                 self.sendIPGraph()
                 continue_listening = False
         
@@ -213,6 +214,7 @@ class Monitor:
                 if len(monitor_ready_set) == device_num and self.record_time == 0:
                     print("monitor info ready for model init")
                     self.is_monitor_ready.set()
+                    self.all_data_ready.set()  # unblock root.py regardless of path
                     if not self.runtime_option:
                         self.send_monitor_signal(0)
                         self.receive_monitor = False

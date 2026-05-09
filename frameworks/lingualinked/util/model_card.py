@@ -221,15 +221,14 @@ class ModelCard:
                 if model_to_load.endswith("vicuna-8bit"):
                     pass
             else:
-                self.model = AutoModelForCausalLM.from_pretrained(model_to_load, low_cpu_mem_usage=True)
+                self.model = AutoModelForCausalLM.from_pretrained(model_to_load)
         elif self.task_type == "Classification":
             # Currently, we support only binary classification for running experiments.
             id2label = {0: "NEGATIVE", 1: "POSITIVE"}
             label2id = {"NEGATIVE": 0, "POSITIVE": 1}
             self.model = AutoModelForSequenceClassification.from_pretrained(model_to_load, num_labels=2,
                                                                             id2label=id2label,
-                                                                            label2id=label2id,
-                                                                            low_cpu_mem_usage=True)
+                                                                            label2id=label2id)
 
         self.tokenizer = AutoTokenizer.from_pretrained(model_to_load)
         print(f"Model and tokenizer for '{model_to_load}' loaded successfully.\n")
@@ -703,9 +702,12 @@ class ModelCard:
                     module_zip_name = "module.zip"
                     target_dir = os.path.join(module_dir, module_zip_name)
                     temp_dir.append(source_dir)
-                    print(f"zipping module file in {source_dir}.")
-                    zip_directory(source_dir, target_dir)
-                    print("zipping finished")
+                    if os.path.exists(target_dir):
+                        print(f"module.zip already exists in {source_dir}, skipping re-zip.")
+                    else:
+                        print(f"zipping module file in {source_dir}.")
+                        zip_directory(source_dir, target_dir)
+                        print("zipping finished")
                 model_zipped_dir.append(temp_dir)
 
             for device_module_dir in model_zipped_dir:

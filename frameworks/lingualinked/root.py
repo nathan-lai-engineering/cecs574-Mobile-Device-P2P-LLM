@@ -17,7 +17,7 @@ monitor_receive_interval = 5  # set intervals for receiving monitor info from cl
 monitor_port = "34567"  # set server port to receive monitor info
 TIMEOUT = 10  # Time to wait for new devices to connect to servers
 runtime_option = False  # set True if the load balance is runtime
-Quntization_Option = False
+Quntization_Option = True
 task = "Generation"
 root_dir = os.path.dirname(os.path.abspath(__file__))
 residual_connection_option = False
@@ -187,7 +187,15 @@ if __name__ == "__main__":
             monitor.set_model_info(bytearray_path, flop_module_path, num_flop)
 
             num_devices = len(devices)
-            monitor_responded = monitor.is_monitor_ready.wait(timeout=60)
+            # Wait for monitor to finish — either all devices responded (is_monitor_ready)
+            # or the monitor hit its own 45s timeout (all_data_ready).  Two daemon threads
+            # race; whichever event fires first unblocks _any_done.  Hard cap: 65s.
+            import threading as _thr
+            _any_done = _thr.Event()
+            _thr.Thread(target=lambda: (monitor.is_monitor_ready.wait(), _any_done.set()), daemon=True).start()
+            _thr.Thread(target=lambda: (monitor.all_data_ready.wait(),   _any_done.set()), daemon=True).start()
+            _any_done.wait(timeout=65)
+            monitor_responded = monitor.is_monitor_ready.is_set()
             if not monitor_responded:
                 print("WARNING: monitor timed out — using fallback hardware metrics")
                 ping_latency = np.full((num_devices, num_devices), 10.0)

@@ -291,6 +291,8 @@ def get_module_flops(modules, tokenizer, sequential_dependency_map=None, residua
                 module_flop_map[index] = first_flop
 
     def flops_from_string(s):
+        if isinstance(s, (int, float)):
+            return float(s)
         scale = {
             'K': 10 ** 3,  # Kilo
             'M': 10 ** 6,  # Mega

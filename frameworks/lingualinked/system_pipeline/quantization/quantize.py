@@ -28,30 +28,26 @@ def onnx_quantize_model(model_path: str):
 
 
 def link_external_data(model_path: str, model_name: str):
-    # Normalize the model_path to an absolute path
     model_path = os.path.abspath(model_path)
-    print(f"Normalized model path: {model_path}")
+    data_filename = model_name + ".onnx.data"
+    destination_dir = os.path.join(model_path, data_filename)
 
-    # Use the pre-computed project root (avoids fragile name-based search)
+    # Newer onnxruntime writes the .data file alongside the output .onnx — already correct.
+    if os.path.exists(destination_dir):
+        print(f"External data already in model directory: {destination_dir}")
+        return
+
+    # Older onnxruntime writes the .data file to cwd (project root). Move it.
     project_dir = str(_PROJECT_ROOT)
-    print(f"Project directory: {project_dir}")
+    original_dir = os.path.join(project_dir, data_filename)
+    print(f"Looking for external data at: {original_dir}")
+    print(f"Destination: {destination_dir}")
 
-    print(f"Project directory: {project_dir}")
-
-    # Construct the original and destination paths
-    original_dir = os.path.join(project_dir, model_name + ".onnx.data")
-    destination_dir = os.path.join(model_path, model_name + ".onnx.data")
-
-    print(f"Original directory: {original_dir}")
-    print(f"Destination directory: {destination_dir}")
-
-    # Check if the file exists and move it
     if os.path.exists(original_dir):
-        print(f"Found external protobuf data for {model_name}")
+        print(f"Found external protobuf data for {model_name}, moving to model directory")
         shutil.move(original_dir, destination_dir)
     else:
-        print(original_dir)
-        raise RuntimeError("External data must exist")
+        raise RuntimeError(f"External data file not found at {destination_dir} or {original_dir}")
 
 
 
