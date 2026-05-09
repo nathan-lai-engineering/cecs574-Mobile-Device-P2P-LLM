@@ -33,6 +33,10 @@ class InferenceViewModel(application: Application) : AndroidViewModel(applicatio
     val uiState: StateFlow<ChatUiState> = _uiState.asStateFlow()
     val isDirEmpty: LiveData<Boolean> = DataRepository.isDirEmptyLiveData
     val sampleId: LiveData<Int> = DataRepository.sampleId
+    val ttft: LiveData<Double> = DataRepository.ttft
+    val throughput: LiveData<Double> = DataRepository.throughput
+    val peakMemMb: LiveData<Double> = DataRepository.peakMemMb
+    val peakBandwidthMbps: LiveData<Double> = DataRepository.peakBandwidthMbps
     private val _prepareState = MutableStateFlow(false)
     val prepareState: StateFlow<Boolean> = _prepareState.asStateFlow()
     val sharedPref = application.getSharedPreferences("myPrefs", Context.MODE_PRIVATE)

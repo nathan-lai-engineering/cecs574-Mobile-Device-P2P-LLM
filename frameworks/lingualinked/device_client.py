@@ -784,6 +784,12 @@ class DeviceSimulator:
             total_steps = self.num_sample
             steps_per_sample = 1
 
+        gen_start_time = None  # set on first tensor received
+        ttft = None            # fixed after step 0
+        token_count = 0
+        peak_mem_mb = 0.0
+        peak_bw_mbps = 0.0
+
         try:
             for step in range(total_steps):
                 sample_id = step // steps_per_sample
@@ -827,6 +833,48 @@ class DeviceSimulator:
                 output_bytes = self._run_onnx_worker(input_bytes, sample_id)
                 t_onnx_done = time.time()
                 print(f"[{self.local_ip}] Step {step} VM inference: {t_onnx_done - t_tensor_recv:.3f}s (deserialize+ONNX)")
+
+                # ── per-token stats ───────────────────────────────────────────
+                if gen_start_time is None:
+                    gen_start_time = t_tensor_recv
+                if step == 0:
+                    ttft = t_onnx_done - t_tensor_recv
+                token_count += 1
+                elapsed = t_onnx_done - gen_start_time
+
+                # Memory (psutil RSS preferred; /proc fallback on Linux)
+                mem_mb = 0.0
+                if PSUTIL_AVAILABLE:
+                    try:
+                        mem_mb = _psutil.Process().memory_info().rss / (1024 * 1024)
+                    except Exception:
+                        pass
+                else:
+                    try:
+                        with open('/proc/self/status') as _f:
+                            for _line in _f:
+                                if _line.startswith('VmRSS:'):
+                                    mem_mb = int(_line.split()[1]) / 1024
+                                    break
+                    except Exception:
+                        pass
+                peak_mem_mb = max(peak_mem_mb, mem_mb)
+
+                # Bandwidth: input tensor bytes through ONNX / inference time
+                onnx_time = t_onnx_done - t_tensor_recv
+                if onnx_time > 0:
+                    bw_mbps = len(input_bytes) / (1024 * 1024) / onnx_time
+                    peak_bw_mbps = max(peak_bw_mbps, bw_mbps)
+
+                throughput = token_count / elapsed if elapsed > 0 else 0.0
+                print(
+                    f"[{self.local_ip}] Token {step:>3d} | "
+                    f"TTFT: {ttft:.2f}s | "
+                    f"Throughput: {throughput:.3f} tok/s | "
+                    f"Mem: {peak_mem_mb:.0f}MB | "
+                    f"Peak BW: {peak_bw_mbps:.2f}MB/s"
+                )
+                # ─────────────────────────────────────────────────────────────
 
                 event = self._data_ready.setdefault(sample_id, threading.Event())
                 self.output_data[sample_id] = output_bytes

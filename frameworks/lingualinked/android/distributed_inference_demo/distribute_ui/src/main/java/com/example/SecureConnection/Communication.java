@@ -524,6 +524,9 @@ public class Communication {
                 int input_size = param.max_length;
 
                 long firstTokenStart = System.nanoTime();
+                int tokenCount = 0;
+                double peakMemMb = 0.0;
+                double peakBandwidthMbps = 0.0;
 
                 for (int m = 0; m < param.max_length; m++) {
                     long stepStart = System.nanoTime();
@@ -533,9 +536,31 @@ public class Communication {
 
                         if (receivedId == -1) break;  // EOS — skip UI update
 
+                        double stepSec = (System.nanoTime() - stepStart) / 1e9;
+                        tokenCount++;
+                        double elapsed = (System.nanoTime() - firstTokenStart) / 1e9;
+
                         if (m == 0) {
-                            double ttft = (System.nanoTime() - firstTokenStart) / 1e9;
+                            double ttft = elapsed;
                             System.out.println("=== TIME TO FIRST TOKEN: " + String.format("%.3f", ttft) + "s ===");
+                            DataRepository.INSTANCE.updateTtft(ttft);
+                        }
+
+                        DataRepository.INSTANCE.updateThroughput(tokenCount / elapsed);
+
+                        // Peak memory: Java heap + native heap
+                        long javaUsed = Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory();
+                        long nativeUsed = android.os.Debug.getNativeHeapAllocatedSize();
+                        double totalMb = (javaUsed + nativeUsed) / (1024.0 * 1024.0);
+                        peakMemMb = Math.max(peakMemMb, totalMb);
+                        DataRepository.INSTANCE.updatePeakMem(peakMemMb);
+
+                        // Peak bandwidth: tensor bytes sent through pipeline / step time
+                        byte[] outTensor = OutputData.get(receivedId);
+                        if (outTensor != null && stepSec > 0) {
+                            double bwMbps = (outTensor.length / (1024.0 * 1024.0)) / stepSec;
+                            peakBandwidthMbps = Math.max(peakBandwidthMbps, bwMbps);
+                            DataRepository.INSTANCE.updatePeakBandwidth(peakBandwidthMbps);
                         }
 
                         if (cfg.isHeader()) {

@@ -40,6 +40,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.livedata.observeAsState
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.LastBaseline
@@ -85,6 +86,10 @@ fun ChatScreen(
     val scope = rememberCoroutineScope()
     val uiState = viewModel.uiState.collectAsState()
     val sampleId by viewModel.sampleId.observeAsState(0)
+    val ttft by viewModel.ttft.observeAsState(null)
+    val throughput by viewModel.throughput.observeAsState(null)
+    val peakMemMb by viewModel.peakMemMb.observeAsState(null)
+    val peakBandwidthMbps by viewModel.peakBandwidthMbps.observeAsState(null)
     Scaffold(
         topBar = {
             ChatBar(
@@ -122,11 +127,20 @@ fun ChatScreen(
                 modifier = Modifier.weight(1f),
                 scrollState = scrollState
             )
+            if (ttft != null || throughput != null || peakMemMb != null || peakBandwidthMbps != null) {
+                InferenceMetricsBar(
+                    ttft = ttft,
+                    throughput = throughput,
+                    peakMemMb = peakMemMb,
+                    peakBandwidthMbps = peakBandwidthMbps
+                )
+            }
             UserInput(
                 onClicked = {
                 },
                 onMessageSent = { content ->
                     viewModel.addChatHistory(Messaging(authorMe, content, getCurrentFormattedTime()))
+                    com.example.distribute_ui.DataRepository.resetMetrics()
                     EventBus.getDefault().post(Events.messageSentEvent(true, content))
                 },
                 resetScroll = {
@@ -223,6 +237,51 @@ fun Message(
             text = msg.content,
             style = MaterialTheme.typography.bodyMedium
         )
+    }
+}
+
+@Composable
+fun InferenceMetricsBar(
+    ttft: Double?,
+    throughput: Double?,
+    peakMemMb: Double?,
+    peakBandwidthMbps: Double?
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 4.dp)
+    ) {
+        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = if (ttft != null) "TTFT: ${"%.2f".format(ttft)}s" else "TTFT: —",
+                style = MaterialTheme.typography.labelSmall,
+                fontFamily = FontFamily.Monospace,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f)
+            )
+            Text(
+                text = if (throughput != null) "${"%.2f".format(throughput)} tok/s" else "— tok/s",
+                style = MaterialTheme.typography.labelSmall,
+                fontFamily = FontFamily.Monospace,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = if (peakMemMb != null) "Mem: ${"%.0f".format(peakMemMb)}MB" else "Mem: —",
+                style = MaterialTheme.typography.labelSmall,
+                fontFamily = FontFamily.Monospace,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f)
+            )
+            Text(
+                text = if (peakBandwidthMbps != null) "BW: ${"%.2f".format(peakBandwidthMbps)}MB/s" else "BW: —",
+                style = MaterialTheme.typography.labelSmall,
+                fontFamily = FontFamily.Monospace,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
     }
 }
 
