@@ -3,7 +3,6 @@ import errno
 import numpy
 import onnx
 import torch
-import torchvision
 import os
 import onnxruntime
 from tqdm.auto import tqdm
@@ -17,10 +16,8 @@ from system_pipeline.model_split.utils import InferenceBuffer, get_receiver_res_
 import transformers
 from contextlib import contextmanager
 from pathlib import Path
-from onnxruntime_extensions.tools import add_pre_post_processing_to_model as add_ppp
 import sys
 import struct
-from mlprodict.onnx_tools.onnx_manipulations import select_model_inputs_outputs
 from onnx import helper, checker
 from onnx import TensorProto
 import gc

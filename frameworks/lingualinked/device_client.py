@@ -743,7 +743,9 @@ class DeviceSimulator:
                 token_id = struct.unpack('<i', tensor_bytes)[0]
             else:
                 arr = np.frombuffer(tensor_bytes, dtype=np.float32)
-                token_id = int(np.argmax(arr[-4096:] if len(arr) >= 4096 else arr))
+                vocab_size = 32000
+                arr_last = arr[-vocab_size:] if len(arr) >= vocab_size else arr
+                token_id = int(np.argmax(arr_last))
             if self.tokenizer:
                 text = self.tokenizer.decode([token_id], skip_special_tokens=True)
                 print(f"\n[{self.local_ip}] Response token: '{text}'\n")

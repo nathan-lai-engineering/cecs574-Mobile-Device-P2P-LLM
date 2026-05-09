@@ -64,9 +64,20 @@ public class BackgroundService extends Service {
             inputStream.close();
         } catch (IOException e) {
             e.printStackTrace();
-            // Handle the exception
         }
         return serverIP;
+    }
+
+    private String getDeviceIPOverride() {
+        Properties properties = new Properties();
+        try {
+            InputStream inputStream = getAssets().open("config.properties");
+            properties.load(inputStream);
+            inputStream.close();
+            return properties.getProperty("device_ip", "").trim();
+        } catch (IOException e) {
+            return "";
+        }
     }
 
     private boolean isModelDirectoryEmpty(String modelPath) {
@@ -110,6 +121,16 @@ public class BackgroundService extends Service {
             // k is parameter for top-k
             // initial_temp is the parameter for temperature.
             Config cfg = new Config(server_ip, 23456, 7, 0.7f);
+
+            // Allow config.properties to pin device_ip so the APK registers a
+            // routable address (e.g. WireGuard VPN IP) instead of the auto-detected
+            // interface IP, which may be an emulator NAT address or LAN IP that
+            // other nodes cannot reach.
+            String deviceIPOverride = getDeviceIPOverride();
+            if (!deviceIPOverride.isEmpty()) {
+                Config.local = deviceIPOverride;
+                Log.d(TAG, "device IP overridden to: " + deviceIPOverride);
+            }
 
             Communication com = new Communication(cfg);
             Communication.loadBalance = new LoadBalance(com, cfg);

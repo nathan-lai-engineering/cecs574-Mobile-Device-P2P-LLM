@@ -1,128 +1,148 @@
-install requirements
+# LinguaLinked
 
-## Running coordinator node
-docker run -it --name lingualinked `
-  -p 5000:5000 `
-  -v "<path to repo>:/app" `
-  -v "<path to model>:/app/llama-2-7b" `
-  -w /app `
-  python:3.10-slim /bin/bash
+Distributed LLM inference across Android devices and Python worker nodes. The coordinator splits the model and orchestrates inference; the header node drives token generation; worker nodes each run one model shard.
 
-cd frameworks/lingualinked/
+> On first run, the coordinator takes several minutes to analyze and shard TinyLlama (2.2 GB) — it runs multiple full ONNX forward passes to profile the model. Subsequent runs use the cached shards and skip this step.
 
-pip install torch --index-url https://download.pytorch.org/whl/cpu
+**Startup order: Coordinator → Workers → Header (APK last)**
 
-pip install -r requirements.txt
+---
 
-apt-get update && apt-get install -y patchelf
+## Coordinator
 
-patchelf --clear-execstack /usr/local/lib/python3.10/site-packages/onnxruntime/capi/onnxruntime_pybind11_state.cpython-310-x86_64-linux-gnu.so
+Runs on your local machine via Docker. Handles device registration, model sharding, and shard distribution.
 
-docker build -t lingualinked .
+### Build the image (first time only)
 
+```bash
+cd frameworks/lingualinked
+docker build -t lingualinked-coordinator .
+```
+
+### Start coordinator
+
+```bash
 docker compose run --rm --service-ports coordinator
+```
 
+This opens a shell inside the container at `/app`. Then run:
+
+```bash
 python root.py
+```
 
+Wait until `start listening` appears before starting any workers.
 
-## Running emulator for header/worker
-Install android studio
+> TinyLlama downloads automatically from HuggingFace Hub on first run. Subsequent runs use the local shard cache and skip re-downloading.
 
-Create a phone device with 6gb memory
+---
 
-Open ./android/distributed_inference_demo
+## Header — Android Studio Emulator
 
-Run distribute_ui, green play button android studio
+Runs the APK on your local machine. Start this **after** all workers are registered with the coordinator.
 
-## Running thin worker node
+### Configure `config.properties` before building
 
-See project root for setting up VM instance
+Edit `android/distributed_inference_demo/distribute_ui/src/main/assets/config.properties`:
 
-sudo apt update && sudo apt install -y python3-pip python3-venv git
+```properties
+# Coordinator address — 10.0.2.2 is the emulator's gateway to the host machine
+server_ip=10.0.2.2
 
-sudo apt install openssh-server -y
+# Leave blank for local-only setup.
+# Set to your Tailscale IP if workers are on remote machines (Hetzner).
+device_ip=
+```
 
-ssh vboxuser@192.168.1.157 #example ip, run this on your local machine for easy terminal
+> This file is baked into the APK at build time. Any change requires a rebuild and reinstall.
 
+### Run the APK
+
+1. Open `android/distributed_inference_demo` in Android Studio
+2. Create a phone device with at least 6 GB RAM in AVD Manager
+3. Run `distribute_ui` (green play button)
+4. In the app: select role **Header**, select model **TinyLlama**, tap **Next**
+
+### ADB port forwarding
+
+Required when workers are on a different machine (VM or Hetzner) so they can connect back to the emulator's ZMQ ports:
+
+```powershell
+# Run in PowerShell on the local machine
+12345..12360 | ForEach-Object { adb forward tcp:$_ tcp:$_ }
+adb forward tcp:55555 tcp:55555
+```
+
+---
+
+## Worker — Local VM
+
+For a worker running in a VirtualBox or VMware VM on your local machine.
+
+### Initial setup
+
+```bash
+sudo apt update && sudo apt install -y python3-pip python3-venv git openssh-server
+```
+
+SSH into the VM from the host for an easier terminal (optional):
+
+```bash
+ssh vboxuser@<vm-ip>
+```
+
+### Install dependencies
+
+```bash
 python3 -m venv ~/ll
-
 source ~/ll/bin/activate
-
 pip install pyzmq onnxruntime numpy psutil
-
-python3 ~/device_client.py --role worker --ip 10.0.2.2 --server 192.168.1.148 --ip-map 10.0.2.15=100.105.155.44:12348 --model-dir device_models/192_168_1_121
-
-## Cloud VM Deployment (True Distributed — Each Node on a Separate VM)
-
-Oracle Cloud's default network security policies block the ZMQ ports LinguaLinked needs,
-which is why it fails there. The following providers work without special workarounds.
-
-### Recommended cloud providers
-
-| Provider | Cost/node | Ease of firewall config | Notes |
-|---|---|---|---|
-| **DigitalOcean Droplets** | $6–12/mo | ★★★★★ | Best choice. VPC private networking within a region is free and fast. |
-| **Hetzner Cloud** | €4–7/mo | ★★★★☆ | Cheapest. Good EU + US regions. Simple Firewall UI. |
-| **Vultr** | $5–10/mo | ★★★★☆ | Similar to DigitalOcean. |
-| **AWS EC2** (t3.small) | ~$15/mo | ★★★☆☆ | Free tier available. Security Groups are straightforward but more steps. |
-| **GCP** (e2-small) | ~$13/mo | ★★★☆☆ | Free tier. VPC firewall rules via web console or gcloud CLI. |
-
-### Required open ports
-
-Open these **inbound** TCP rules on every VM's firewall/security-group:
-
-| Port | Who needs it open | Purpose |
-|---|---|---|
-| 22 | All VMs | SSH |
-| 23456 | **Coordinator VM only** | ZMQ ROUTER — device registration |
-| 34567 | **Coordinator VM only** | ZMQ ROUTER — hardware monitor |
-| 12345–12360 | **All worker/header VMs** | P2P tensor transfer (ROUTER/DEALER) |
-| 55555 | **All worker/header VMs** | Bandwidth test server (TCP) |
-
-DigitalOcean example (using their CLI):
-```
-doctl compute firewall create \
-  --name lingualinked \
-  --inbound-rules "protocol:tcp,ports:22,address:0.0.0.0/0 \
-                   protocol:tcp,ports:23456,address:0.0.0.0/0 \
-                   protocol:tcp,ports:34567,address:0.0.0.0/0 \
-                   protocol:tcp,ports:12345-12360,address:0.0.0.0/0 \
-                   protocol:tcp,ports:55555,address:0.0.0.0/0"
 ```
 
-### IP addressing on cloud VMs
-
-Each `device_client.py --ip` argument must be the IP **other VMs use to reach this node**:
-
-- **Same cloud region / VPC** — use the VM's **private/internal IP** (e.g. `10.x.x.x`).
-  Traffic stays within the provider's network: zero egress cost, lower latency.
-- **Different regions or providers** — use the VM's **public IP**.
-
-The `--server` argument is always the coordinator's reachable IP (private or public, same rule).
-
-### Example: 2-node cloud setup (coordinator + 1 worker/header) on DigitalOcean
+### Run worker
 
 ```bash
-# --- Coordinator VM (runs root.py inside Docker) ---
-export MODEL_PATH=/opt/models/llama-2-7b   # where weights live on this VM
-docker compose run --rm --service-ports coordinator
-python root.py
-
-# --- Worker/Header VM (separate Droplet, private IP 10.0.0.5) ---
-pip install pyzmq onnxruntime numpy psutil
 python3 device_client.py \
-    --role header \
-    --ip 10.0.0.5 \               # this VM's private IP
-    --server 10.0.0.4 \           # coordinator's private IP
-    --model llama-2-7b
+    --role worker \
+    --ip <vm-ip> \      # this VM's IP, reachable by the coordinator and header
+    --server <host-ip>  # coordinator machine's LAN IP
 ```
 
-### Running coordinator without Docker on a Linux cloud VM
+---
+
+## Worker — Hetzner (Cloud)
+
+See [HETZNER_DEPLOYMENT.md](HETZNER_DEPLOYMENT.md) for the complete setup guide — Hetzner CAX11 ARM64 nodes connected via Tailscale.
+
+### Quick reference
+
+**Install Tailscale on each worker:**
 
 ```bash
-cd frameworks/lingualinked/
-python3 -m venv venv && source venv/bin/activate
-pip install torch --index-url https://download.pytorch.org/whl/cpu
-pip install -r requirements.txt
-python root.py
+curl -fsSL https://tailscale.com/install.sh | sh
+sudo tailscale up
+tailscale ip -4   # note this 100.x.x.x address — used as --ip below
 ```
+
+**Install Python 3.10 and dependencies (Ubuntu 22.04):**
+
+```bash
+sudo apt-get update
+sudo apt-get install -y python3.10 python3.10-venv python3-pip
+
+python3.10 -m venv .venv && source .venv/bin/activate
+
+pip install pyzmq==25.1.0 onnxruntime==1.16.1 numpy==1.26.4 psutil==5.9.5 \
+    transformers==4.33.3 tokenizers sentencepiece protobuf
+```
+
+**Run worker:**
+
+```bash
+python device_client.py \
+    --role worker \
+    --ip 100.x.x.2 \    # this worker's Tailscale IP
+    --server 100.x.x.1  # coordinator's Tailscale IP (local machine)
+```
+
+Set `device_ip=<host Tailscale IP>` in `config.properties` before building the APK.

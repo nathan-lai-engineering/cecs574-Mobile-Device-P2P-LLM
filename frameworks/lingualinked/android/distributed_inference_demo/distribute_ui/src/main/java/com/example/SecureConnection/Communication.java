@@ -388,7 +388,7 @@ public class Communication {
                     while(sampleId >= input_data.size())
                         Thread.sleep(1000);
                     String rawInput = input_data.get(sampleId);
-                    String formattedPrompt = "<|user|>\n" + rawInput + "</s>\n<|assistant|>\n";
+                    String formattedPrompt = "<|system|>\nYou are a helpful assistant.</s>\n<|user|>\n" + rawInput + "</s>\n<|assistant|>\n";
                     int[] data = encodeString(formattedPrompt, tokenizer);
                     System.out.println(Arrays.toString(data));
                     this.InputIds.put(sampleId, Utils.convertIntegerArrayToArrayList(data));
@@ -651,11 +651,7 @@ public class Communication {
                 clientSocket.sendMore(id);
                 clientSocket.sendMore(seqLenBytes);
                 System.out.println("No. " + receivedId + " pushing tensor seqLen=" + seqLen);
-                if (cfg.isTailer() && (param.task_type.equals("generation"))) {
-                    clientSocket.send(OutputData.get(receivedId), 0);
-                } else {
-                    clientSocket.send(OutputData.get(receivedId), 0);
-                }
+                clientSocket.send(OutputData.get(receivedId), 0);
             } else {
                 System.out.println(receivedId + " is not in the OutputData");
             }

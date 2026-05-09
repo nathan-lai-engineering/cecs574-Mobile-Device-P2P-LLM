@@ -1,0 +1,33 @@
+# Git
+.git
+.gitignore
+
+# Generated ONNX shards and model weights — available via volume mount at runtime
+onnx_model/backup/
+*.onnx
+*.onnx.data
+llama-2-7b/
+hf_models/
+
+# Android project — not needed in coordinator image
+android/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Local config / secrets
+.env
+
+# Docs and editor files
+*.md
+.idea/
+.vscode/

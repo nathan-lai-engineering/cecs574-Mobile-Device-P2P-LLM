@@ -2,7 +2,12 @@ import torch
 import random
 from system_pipeline.model_split.model_split import *
 import json
-from deepspeed.profiling.flops_profiler.profiler import get_model_profile
+from thop import profile as _thop_profile
+
+def get_model_profile(model, args=None, kwargs=None, print_profile=False, **_):
+    inputs = tuple(args) if args else ()
+    macs, params = _thop_profile(model, inputs=inputs, verbose=False)
+    return int(macs * 2), int(macs), int(params)
 import numpy as np
 
 

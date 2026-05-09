@@ -1,33 +1,25 @@
-FROM python:3.10-slim
+# syntax=docker/dockerfile:1
+FROM python:3.10-slim-bookworm
 
-# Install build dependencies for the C++ inference engine
-RUN apt-get update && apt-get install -y \
-    build-essential cmake git libopenblas-dev \
-    && rm -rf /var/lib/apt/lists/*
+# libgomp1: OpenMP runtime needed by numpy and onnxruntime (not bundled in their wheels)
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update && apt-get install -y libgomp1
 
 WORKDIR /app
 
-RUN pip install --no-cache-dir "numpy<2" torch==2.0.1 torchvision==0.15.2
+# CPU-only torch wheel is ~200MB vs ~1.5GB for the default CUDA-enabled build
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install \
+    torch==2.0.1+cpu \
+    --index-url https://download.pytorch.org/whl/cpu
 
-# Install Python dependencies first (better for Docker caching)
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-RUN pip install "transformers==4.33.3"
+COPY requirements.coordinator.txt .
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install -r requirements.coordinator.txt
 
 # Patch LLaMA for GQA support + torch.fx symbolic tracing compatibility
 COPY patch_llama.py .
 RUN python patch_llama.py
 
-RUN apt-get update && apt-get install -y patchelf
-RUN find /usr/local/lib/python3.10/site-packages/onnxruntime/capi/ -name "*.so" -exec patchelf --clear-execstack {} +
-
-# Copy the rest of the code
-COPY . .
-
-# Build the C++ backend components
-#RUN mkdir build && cd build && cmake .. && make -j$(nproc)
-
-RUN find /usr/local/lib/python3.10/site-packages/onnxruntime -name "*.so" -exec execstack -c {} + || true
-
-# Default entrypoint
 ENTRYPOINT ["/bin/bash"]

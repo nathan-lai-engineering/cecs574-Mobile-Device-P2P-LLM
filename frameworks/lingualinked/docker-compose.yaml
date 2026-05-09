@@ -1,6 +1,6 @@
 services:
   coordinator:
-    image: aether-coordinator          # use pre-built image (run `docker build -t aether-coordinator .` first)
+    image: lingualinked-coordinator     # use pre-built image (run `docker build -t lingualinked-coordinator .` first)
     container_name: lingualink_node_1
     stdin_open: true                   # -i
     tty: true                          # -t
