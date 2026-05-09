@@ -20,12 +20,27 @@ from threading import Thread
         root -> client; Close the connection
 """
 
-def communication_open_close(sender, config, status, conditions, lock, open=True):
+def communication_open_close(sender, config, status, conditions, lock, open=True, abort_event=None):
+    """Handle one device through the full Ready→Open→Prepare→Initialized→Start→Running→Finish→Close
+    lifecycle.  abort_event (threading.Event) can be set externally to unblock a stuck session."""
+
+    COND_POLL_S = 10  # how often to check abort inside condition waits
+
+    def recv_next():
+        """Return the next multipart message, or None if abort fires."""
+        while abort_event is None or not abort_event.is_set():
+            with lock[0]:
+                if sender.poll(1000):
+                    return sender.recv_multipart()
+        return None
+
     ## Status: Ready, Open, Prepare, Initialized, Start, Running, Finish
     while True:
         print('enter communication open close')
-        with lock[0]:
-            info = sender.recv_multipart()
+        info = recv_next()
+        if info is None:
+            print('[Server] abort_event set — exiting lifecycle thread.')
+            return
         client_id = info[0]
         msg = info[1]
         print(client_id + msg)
@@ -59,7 +74,9 @@ def communication_open_close(sender, config, status, conditions, lock, open=True
 
             with conditions[0]:
                 while not check_status(status, config, b"Open"):
-                    conditions[0].wait()
+                    conditions[0].wait(timeout=COND_POLL_S)
+                    if abort_event is not None and abort_event.is_set():
+                        return
                 conditions[0].notify_all()
 
             ## Prepare
@@ -75,7 +92,9 @@ def communication_open_close(sender, config, status, conditions, lock, open=True
 
             with conditions[1]:
                 while not check_status(status, config, b"Initialized"):
-                    conditions[1].wait()
+                    conditions[1].wait(timeout=COND_POLL_S)
+                    if abort_event is not None and abort_event.is_set():
+                        return
                 conditions[1].notify_all()
 
             ## Start — acquire send lock OUTSIDE the condition block to avoid
@@ -87,32 +106,14 @@ def communication_open_close(sender, config, status, conditions, lock, open=True
             print(f"Status: Start {config['ids'][client_id]}")
 
         elif msg == b"Running":
-            # Todo simulate load balance
-            # time.sleep(10)
-            # print(f"{config['ids'][client_id]} Start Load Balance")
-            # # config["session_index"] = ";".join(["0,1", "2,3,4,5,6", "7,8,9"]).encode('utf-8')
-            # sender.send_multipart([client_id, b"re-balance",
-            #                                   config["session_index"],
-            #                                   json.dumps(config["dependency"]).encode()])
-            #
-            # if (config["ids"][client_id] == config["head_node"].encode()):
-            #     client_id, msg = sender.recv_multipart()
-            #     config["reload_sampleId"] = msg.decode()
-            #     print(f"The Reload Sample starts from {config['reload_sampleId']}")
-            #     assert config["reload_sampleId"].isdigit(), f"reload sampleId is not an integer string"
-            # else:
-            #     while (config["reload_sampleId"] == None):
-            #         print("Wait the resample ID")
-            #         time.sleep(0.1)
-            #
-            #     print(f"Send Reload Sample id : {config['reload_sampleId']} to {config['ids'][client_id]}")
-            #     sender.send_multipart([client_id, "id".encode(), config["reload_sampleId"].encode()])
             pass
         elif msg == b'Finish':
             status[client_id] = b'Close'
             with conditions[2]:
                 while not check_status(status, config, b"Close"):
-                    conditions[2].wait()
+                    conditions[2].wait(timeout=COND_POLL_S)
+                    if abort_event is not None and abort_event.is_set():
+                        return
                 conditions[2].notify_all()
 
             with lock[1]:

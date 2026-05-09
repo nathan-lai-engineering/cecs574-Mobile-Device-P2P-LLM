@@ -106,11 +106,44 @@ class DeviceSimulator:
         if self.ip_map:
             print(f"[{self.local_ip}] IP map (ADB): {self.ip_map}")
 
-        self.root_socket = self.context.socket(zmq.DEALER)
-        self.root_socket.connect(f"tcp://{self.server_ip}:{self.server_port}")
+        while True:
+            self._run_once()
+            print(f"[{time.strftime('%H:%M:%S')}][{self.local_ip}] Reconnecting in 30s...")
+            time.sleep(30)
 
-        self._register()
-        self._lifecycle()
+    def _run_once(self):
+        """Attempt one full connection session; always cleans up on exit."""
+        try:
+            self.root_socket = self.context.socket(zmq.DEALER)
+            self.root_socket.connect(f"tcp://{self.server_ip}:{self.server_port}")
+            self._register()
+            self._lifecycle()
+            print(f"[{time.strftime('%H:%M:%S')}][{self.local_ip}] Session complete.")
+        except Exception as e:
+            print(f"[{time.strftime('%H:%M:%S')}][{self.local_ip}] Session ended ({type(e).__name__}: {e}).")
+        finally:
+            self._reset_session()
+
+    def _reset_session(self):
+        """Close all sockets and clear per-session state so the next attempt starts clean."""
+        self._running = False
+        if self.root_socket:
+            try:
+                self.root_socket.close(linger=0)
+            except Exception:
+                pass
+            self.root_socket = None
+        self.output_data.clear()
+        self._data_ready.clear()
+        self._seq_len.clear()
+        self.sessions.clear()
+        self.device_id = -1
+        self.is_header = False
+        self.is_tailer = False
+        self.ip_graph = []
+        self.dependency = {}
+        with self._prompt_lock:
+            self._prompt_queue.clear()
 
     # -----------------------------------------------------------------------
     # Phase 1: RegisterIP
