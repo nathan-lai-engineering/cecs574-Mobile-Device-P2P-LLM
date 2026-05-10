@@ -252,10 +252,6 @@ if __name__ == "__main__":
                     ip_device_module_map[devices[i]["ip"].encode("utf-8")] = device_module_order[
                         i]  # .26: [0], .19: [2], ..
 
-                # retreive session for inference
-                # Each element = comma-separated module indices for one device (e.g. "0,1" for single device)
-                session = [",".join(str(j) for j in i) for i in device_module_order]
-
                 # sort the order of ip graph for transmission
                 ip_module_map = {}
                 sorted_device_module_order = sorted(device_module_order)
@@ -270,11 +266,10 @@ if __name__ == "__main__":
                     else:  # for tailer
                         final_sorted_device_module[-1] = [ip, device_dir_map[tuple(val)]]
 
-                print(f"session index: {session}")
-
                 file_cfg = {}
                 ip_graph = []
                 ip_module = []
+                session = []  # built in lock-step with ip_module so indices always match
                 for d in range(len(final_sorted_device_module)):
                     ip_encode = final_sorted_device_module[d][0]
                     # current only retrieve single module path
@@ -283,6 +278,10 @@ if __name__ == "__main__":
                         file_cfg[ip_encode] = final_sorted_device_module[d][1][0]
                         ip_graph.append(ip_encode.decode("utf-8"))
                         ip_module.append([ip_encode.decode("utf-8"), file_cfg[ip_encode]])
+                        modules = ip_device_module_map[ip_encode]
+                        session.append(",".join(str(j) for j in modules))
+
+                print(f"session index: {session}")
 
                 to_send_model_path = retrieve_sending_dir(root_dir, requested_model, quantization_option=Quntization_Option,
                                                           residual_connection=residual_connection_option)
@@ -313,7 +312,7 @@ if __name__ == "__main__":
 
         config = {"file_path": file_cfg,
                   "num_sample": b'1',
-                  "num_device": len(devices),
+                  "num_device": len(ip_module),   # only devices with assigned shards
                   "max_length": b'100',
                   "task_type": "generation".encode('utf-8'),
                   "core_pool_size": b'1',
@@ -345,7 +344,9 @@ if __name__ == "__main__":
         locks = [threading.Lock(), threading.Lock()]
         conditions = [threading.Condition() for _ in range(max(len(devices) + 1, 3))]
 
-        for i in range(config["num_device"]):
+        # Spawn one thread per registered device so every Ready is handled.
+        # Extra devices (no shard) are rejected gracefully inside communication_open_close.
+        for i in range(len(devices)):
             t = threading.Thread(
                 target=root_server.communication_open_close,
                 args=(send, config, status, conditions, locks),

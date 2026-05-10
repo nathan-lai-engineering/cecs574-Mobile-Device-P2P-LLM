@@ -32,6 +32,7 @@ public class BackgroundService extends Service {
     private final boolean running_classification = false;
     private boolean shouldStartInference = false;
     private boolean runningStatus = false;
+    private volatile boolean prepareEventReceived = false;
     private boolean messageStatus = false;
     public static boolean isServiceRunning = false;
 
@@ -40,6 +41,7 @@ public class BackgroundService extends Service {
     @Subscribe(threadMode = ThreadMode.BACKGROUND)
     public void onRunningStatus(Events.RunningStatusEvent event){
         runningStatus = event.isRunning;
+        prepareEventReceived = true;
         System.out.println("Running Status is: "+runningStatus);
     }
 
@@ -116,115 +118,118 @@ public class BackgroundService extends Service {
         ExecutorService executor = Executors.newSingleThreadExecutor();
         String finalModelName = modelName;
         executor.submit(() -> {
+            // One-time setup: pin the device IP. Config.local is static and survives
+            // across session retries, so we only need to set it once.
             String server_ip = getServerIPAddress();
-
-            // k is parameter for top-k
-            // initial_temp is the parameter for temperature.
-            Config cfg = new Config(server_ip, 23456, 7, 0.7f);
-
-            // Allow config.properties to pin device_ip so the APK registers a
-            // routable address (e.g. WireGuard VPN IP) instead of the auto-detected
-            // interface IP, which may be an emulator NAT address or LAN IP that
-            // other nodes cannot reach.
             String deviceIPOverride = getDeviceIPOverride();
             if (!deviceIPOverride.isEmpty()) {
                 Config.local = deviceIPOverride;
                 Log.d(TAG, "device IP overridden to: " + deviceIPOverride);
             }
 
-            Communication com = new Communication(cfg);
-            Communication.loadBalance = new LoadBalance(com, cfg);
-            com.param.modelPath = getFilesDir() + "";
+            // Outer retry loop — re-registers with the coordinator after each session
+            // ends (whether this device was selected or rejected as a standby).
+            while (true) {
+                // Fresh Communication + Config per session so ZMQ sockets are clean.
+                Config cfg = new Config(server_ip, 23456, 7, 0.7f);
+                Communication com = new Communication(cfg);
+                Communication.loadBalance = new LoadBalance(com, cfg);
+                com.param.modelPath = getFilesDir() + "";
+                prepareEventReceived = false;
+                runningStatus = false;
 
-            // 1. send IP to server to request model
-            if (role.equals("header")) {
-                need_monitor = com.sendIPToServer(role, finalModelName);
-            } else {
-                need_monitor = com.sendIPToServer(role, "");
-            }
-
-            // 2. Initiate device monitor for server-side optimization
-            if (need_monitor) {
-                Intent broadcastIntent = new Intent();
-                broadcastIntent.setAction("START_MONITOR");
-                LocalBroadcastManager.getInstance(this).sendBroadcast(broadcastIntent);
-                sendBroadcast(broadcastIntent);
-                Log.d(TAG, "broadcast sent by backgroundService");
-            }
-
-            // 3.1 start downloading required model and tokenizer files from server
-            com.runPrepareThread();
-
-            // 3.2 Check whether the model file exists
-            while (!runningStatus) {
-                try {
-                    Thread.sleep(1000); // Sleep for a short duration to avoid busy waiting
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt(); // Restore the interrupted status
-                    break; // Exit the loop if the thread is interrupted
+                // 1. Register with coordinator.
+                if (role.equals("header")) {
+                    need_monitor = com.sendIPToServer(role, finalModelName);
+                } else {
+                    need_monitor = com.sendIPToServer(role, "");
                 }
-            }
-            boolean isDirEmpty = isModelDirectoryEmpty(com.param.modelPath);
-            if (runningStatus && !isDirEmpty){
-                System.out.println("Prepare is Finished.");
-                if (cfg.isHeader()){
-                    updateIsDirEmpty(isDirEmpty);
-                }
-                System.out.println("Should start the inference: "+shouldStartInference);
-            }
 
-            // 4. Starting from here we need to based on the ACTION_ENTER_CHAT_SCREEN to start inference
-            if (cfg.isHeader()) {
-                while (!shouldStartInference) {
+                // 2. Start device monitor if coordinator requests hardware metrics.
+                if (need_monitor) {
+                    Intent broadcastIntent = new Intent();
+                    broadcastIntent.setAction("START_MONITOR");
+                    LocalBroadcastManager.getInstance(this).sendBroadcast(broadcastIntent);
+                    sendBroadcast(broadcastIntent);
+                    Log.d(TAG, "broadcast sent by backgroundService");
+                }
+
+                // 3. Download model shard and complete lifecycle (Ready→Prepare→Start).
+                //    prepareEventReceived is set by onRunningStatus on either success or rejection.
+                com.runPrepareThread();
+                while (!prepareEventReceived) {
                     try {
-                        Thread.sleep(1000); // Sleep for a short duration to avoid busy waiting
+                        Thread.sleep(1000);
                     } catch (InterruptedException e) {
-                        Thread.currentThread().interrupt(); // Restore the interrupted status
-                        break; // Exit the loop if the thread is interrupted
-                    }
-                }
-            }
-
-
-            if (shouldStartInference && cfg.isHeader()){
-                // 4.1 parameters set for classification task
-                com.param.classes = new String[]{"Negative", "Positive"};
-                // 4.2 Dataset would be used if we need conduct evaluation experiment
-                Dataset dataset = null;
-
-                while (com.param.numSample <= 0)
-                    Thread.sleep(1000);
-
-                // 4.3 Create input string array to store user input query. By default, the array size
-                // is set to 1 for testing single-turn chat conversation.
-
-                // 4.4 Based on whether user give input to run the inference
-                ArrayList<String> test_input = new ArrayList<>();
-
-                // 4.4.1 Receive userinput from chatscreen and save it to test_input array
-                while (!messageStatus) {
-                    try {
-                        Thread.sleep(1000); // Sleep for a short duration to avoid busy waiting
-                    } catch (InterruptedException e) {
-                        Thread.currentThread().interrupt(); // Restore the interrupted status
-                        break; // Exit the loop if the thread is interrupted
+                        Thread.currentThread().interrupt();
+                        return null;
                     }
                 }
 
-                // TODO: Need to fix the repetitive generation issue
+                if (!runningStatus) {
+                    // Coordinator assigned this session's shards to other devices.
+                    // Stand by and retry when the next session opens.
+                    Log.d(TAG, "No shard assigned this session — standing by. Retrying in 30s...");
+                    try {
+                        Thread.sleep(30_000);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        return null;
+                    }
+                    continue;
+                }
 
+                boolean isDirEmpty = isModelDirectoryEmpty(com.param.modelPath);
+                if (!isDirEmpty) {
+                    System.out.println("Prepare is Finished.");
+                    if (cfg.isHeader()) {
+                        updateIsDirEmpty(isDirEmpty);
+                    }
+                    System.out.println("Should start the inference: " + shouldStartInference);
+                }
+
+                // 4. Header waits for the user to navigate to the chat screen.
                 if (cfg.isHeader()) {
+                    while (!shouldStartInference) {
+                        try {
+                            Thread.sleep(1000);
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                            return null;
+                        }
+                    }
+                }
+
+                // 5. Run inference for this session.
+                if (shouldStartInference && cfg.isHeader()) {
+                    com.param.classes = new String[]{"Negative", "Positive"};
+                    Dataset dataset = null;
+
+                    while (com.param.numSample <= 0)
+                        Thread.sleep(1000);
+
+                    ArrayList<String> test_input = new ArrayList<>();
+
+                    while (!messageStatus) {
+                        try {
+                            Thread.sleep(1000);
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                            return null;
+                        }
+                    }
+
                     new Thread(() -> {
                         int j = 0;
                         String userinput = "";
                         while (j < com.param.numSample) {
-                            if (messageContent.equals(userinput)){
+                            if (messageContent.equals(userinput)) {
                                 try {
                                     Thread.sleep(1000);
                                 } catch (InterruptedException e) {
                                     throw new RuntimeException(e);
                                 }
-                            }else {
+                            } else {
                                 System.out.println("New user input");
                                 System.out.println("***************" + messageContent);
                                 userinput = messageContent;
@@ -234,59 +239,63 @@ public class BackgroundService extends Service {
                         }
                     }).start();
 
-                }
-
-                int corePoolSize = 2;
-                int maximumPoolSize = 2;
-                int keepAliveTime = 500;
-                try {
-                    Log.d(TAG, "communication starts to running");
-                    com.running(corePoolSize, maximumPoolSize, keepAliveTime, test_input);
-                } catch (IOException | InterruptedException e) {
-                    throw new RuntimeException(e);
-                }
-                double startTime = System.nanoTime();
-                results = com.timeUsage;
-
-                if (running_classification) {
-                    if (cfg.isHeader()) {
-                        double accuracy = 0.0;
-                        for (int i = 0; i < com.logits.size(); i++) {
-                            int pred = binaryClassify(com.logits.get(i));
-                            int truth = dataset.labels.get(i).equals("positive") ? 1 : 0;
-                            if (pred == truth) {
-                                accuracy += 1;
-                            }
-                        }
-                        Log.d(TAG, "Task Accuracy: " + (accuracy / com.logits.size()));
+                    int corePoolSize = 2;
+                    int maximumPoolSize = 2;
+                    int keepAliveTime = 500;
+                    double startTime = System.nanoTime();
+                    try {
+                        Log.d(TAG, "communication starts to running");
+                        com.running(corePoolSize, maximumPoolSize, keepAliveTime, test_input);
+                    } catch (IOException | InterruptedException e) {
+                        throw new RuntimeException(e);
                     }
+                    results = com.timeUsage;
+
+                    if (running_classification) {
+                        if (cfg.isHeader()) {
+                            double accuracy = 0.0;
+                            for (int i = 0; i < com.logits.size(); i++) {
+                                int pred = binaryClassify(com.logits.get(i));
+                                int truth = dataset.labels.get(i).equals("positive") ? 1 : 0;
+                                if (pred == truth) {
+                                    accuracy += 1;
+                                }
+                            }
+                            Log.d(TAG, "Task Accuracy: " + (accuracy / com.logits.size()));
+                        }
+                    }
+                    Log.d(TAG, "Results Computation Time: " + (System.nanoTime() - startTime) / 1000000000.0);
+
+                } else if (!cfg.isHeader()) {
+                    com.param.classes = new String[]{"Negative", "Positive"};
+                    while (com.param.numSample <= 0)
+                        Thread.sleep(1000);
+                    ArrayList<String> test_input = new ArrayList<>();
+                    int corePoolSize = 2;
+                    int maximumPoolSize = 2;
+                    int keepAliveTime = 500;
+                    try {
+                        Log.d(TAG, "communication starts to running");
+                        com.running(corePoolSize, maximumPoolSize, keepAliveTime, test_input);
+                    } catch (IOException | InterruptedException e) {
+                        throw new RuntimeException(e);
+                    }
+                    results = com.timeUsage;
                 }
-                Log.d(TAG, "Results Computation Time: " + (System.nanoTime() - startTime) / 1000000000.0);
-                return null;
-            }
 
-            else if (!shouldStartInference && !cfg.isHeader()){ // running on devices are not header
-
-                com.param.classes = new String[]{"Negative", "Positive"};
-                Dataset dataset = null;
-                while (com.param.numSample <= 0)
-                    Thread.sleep(1000);
-//                String[] test_input = new String[com.param.numSample];
-                ArrayList<String> test_input = new ArrayList<>();
-                int corePoolSize = 2;
-                int maximumPoolSize = 2;
-                int keepAliveTime = 500;
-
+                // 6. Session complete — reset per-session state, then loop back to
+                //    re-register for the next session.
+                Log.d(TAG, "Session complete. Reconnecting in 10s...");
+                shouldStartInference = false;
+                messageStatus = false;
+                messageContent = "";
                 try {
-                    Log.d(TAG, "communication starts to running");
-                    com.running(corePoolSize, maximumPoolSize, keepAliveTime, test_input);
-                } catch (IOException | InterruptedException e) {
-                    throw new RuntimeException(e);
+                    Thread.sleep(10_000);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return null;
                 }
-                results = com.timeUsage;
-                return null;
             }
-            return null;
         });
 
         return START_STICKY; // This tells the system to restart the service if it gets killed due to resource constraints.

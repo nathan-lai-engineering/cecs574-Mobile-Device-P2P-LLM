@@ -49,8 +49,18 @@ def communication_open_close(sender, config, status, conditions, lock, open=True
             ## Open
             if len(info) != 3:
                 print("Error")
+                continue
 
-            config["ids"][client_id] = info[2]
+            node_ip = info[2]
+            if node_ip not in config["file_path"]:
+                # Device registered but has no shard assigned — reject and exit this thread.
+                # Status is NOT updated so the barriers for valid devices are unaffected.
+                print(f"[Server] Device {node_ip} has no shard — sending Close.")
+                with lock[1]:
+                    sender.send_multipart([client_id, b'Close'])
+                return
+
+            config["ids"][client_id] = node_ip
             print(config["ids"])
 
             status[client_id] = b'Ready'

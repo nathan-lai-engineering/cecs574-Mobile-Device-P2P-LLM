@@ -62,26 +62,31 @@ public class Client {
                 // Open
                 String msg = new String(receiver.recv(0));
                 Log.d(TAG, "msg: " + msg);
-                if (msg.equals("Open")) {
-                    param.status = "Open";
-                    System.out.println("Status: Open");
-
-                    receiveIPGraph(cfg, receiver);
-
-                    receiveSessionIndex(receiver);
-
-                    receiveTaskType(param,receiver);
-
-                    receiveThreadPoolSize(param, receiver);
-
-                    receiveBatchSize(param, receiver);
-
-                    receiveSeqLength(param,receiver);
-
-                    receiveDependencyMap(receiver);
-
-                    Log.d(TAG, "open status receive info finished");
+                if (!msg.equals("Open")) {
+                    // Server rejected this device (e.g. no shard assigned). Signal
+                    // BackgroundService so it stops waiting and can clean up.
+                    Log.d(TAG, "Server sent '" + msg + "' instead of Open — device rejected, aborting lifecycle.");
+                    EventBus.getDefault().post(new Events.RunningStatusEvent(false));
+                    return;
                 }
+                param.status = "Open";
+                System.out.println("Status: Open");
+
+                receiveIPGraph(cfg, receiver);
+
+                receiveSessionIndex(receiver);
+
+                receiveTaskType(param,receiver);
+
+                receiveThreadPoolSize(param, receiver);
+
+                receiveBatchSize(param, receiver);
+
+                receiveSeqLength(param,receiver);
+
+                receiveDependencyMap(receiver);
+
+                Log.d(TAG, "open status receive info finished");
 
                 // Prepare
                 msg = new String(receiver.recv(0));
